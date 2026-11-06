@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=MediCart Cart Screen
+Comment=IUB Robotics Team — MediCart patient screen
+Exec=/opt/medicart/kiosk/start-kiosk.sh
+X-GNOME-Autostart-enabled=true
+NoDisplay=false

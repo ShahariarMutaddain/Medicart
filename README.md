@@ -39,8 +39,8 @@ Both get the same live picture at the same time, so obstacle detection keeps run
 
 | Path | What it is |
 |---|---|
-| `web/` | The website. Deploy this folder to Vercel. `index.html` = doctor console, `cart.html` = cart screen. |
-| `web/js/config.js` | **The one file you edit**: Firebase project, MQTT broker, cart ID, TURN servers. |
+| `index.html`, `cart.html`, `js/`, `assets/`, `vercel.json` | The website, at the top of the repo so Vercel serves it with default settings. `index.html` = doctor console, `cart.html` = cart screen. |
+| `js/config.js` | **The one file you edit**: Firebase project, MQTT broker, cart ID, TURN servers. |
 | `firebase/` | Security rules for Realtime Database and Firestore. |
 | `esp32_sensor/medicart_sensor/` | Arduino sketch for the ESP32 sensor board. |
 | `esp32_sensor/prebuilt/` | Ready-to-flash firmware (`…_merged.bin`, flash at address `0x0`). |
@@ -82,7 +82,7 @@ iub-medicart-591a7e01d2/01/status      ← online/offline, IP, Wi-Fi signal (ret
 ```
 
 Treat that prefix like a password: anyone who knows it can read the readings or send fake ones. It lives in two places, and they must match:
-- `web/js/config.js` → `MQTT_TOPIC_PREFIX`
+- `js/config.js` → `MQTT_TOPIC_PREFIX`
 - `esp32_sensor/medicart_sensor/medicart_sensor.ino` → `TOPIC_PREFIX`
 
 To change it, edit both, re-flash the ESP32 and redeploy the website.
@@ -100,15 +100,15 @@ To change it, edit both, re-flash the ESP32 and redeploy the website.
 
 ```bash
 npm i -g vercel
-cd web
+cd medicart-system
 vercel            # first time: "Set up and deploy?" → Y, new project, name e.g. medicart-iub,
                   # directory ./ , no build command, no output dir changes
 vercel --prod
 ```
 
-**Option B — GitHub**: push this folder to a repo → <https://vercel.com/new> → import it → **Root Directory: `web`**, **Framework Preset: Other** → Deploy.
+**Option B — GitHub**: push this folder to a repo → <https://vercel.com/new> → import it → **Root Directory: `./` (default)**, **Framework Preset: Other** → Deploy.
 
-Before deploying you can also just double-click `web/index.html` to try the console locally.
+Before deploying you can also just double-click `index.html` to try the console locally.
 
 You get two pages:
 
@@ -209,7 +209,7 @@ No hardware yet? **Demo data** in the console's top bar simulates the sensor (no
 |---|---|
 | Stuck on the loading screen / **“MediCart couldn't start”** | The message says what failed. Usually no internet (Firebase loads from www.gstatic.com), or the `js/` folder isn't next to `index.html`. |
 | Console says **Cart offline** | Cart screen not on or not signed in. On the Pi: is Chromium showing `/cart`? Check `/etc/medicart/kiosk.conf`. |
-| Call rings, cart answers, then **Connection failed** | Doctor and cart are on networks that block direct connections (common on campus Wi-Fi ↔ mobile data). Add a TURN server to `ICE_SERVERS` in `web/js/config.js` (e.g. a free Metered.ca or Cloudflare TURN account) and redeploy. The console's stats chip shows `relay` when TURN is in use. |
+| Call rings, cart answers, then **Connection failed** | Doctor and cart are on networks that block direct connections (common on campus Wi-Fi ↔ mobile data). Add a TURN server to `ICE_SERVERS` in `js/config.js` (e.g. a free Metered.ca or Cloudflare TURN account) and redeploy. The console's stats chip shows `relay` when TURN is in use. |
 | Cart shows **No camera** | `systemctl status medicart-camera`. Webcam unplugged, or `v4l2loopback` not loaded (`sudo modprobe v4l2loopback`, then restart the service). The cart screen picks the camera back up by itself within ~15 s. |
 | `medicart.py`: “Could not open camera 0” / device busy | It is opening the real camera, which the splitter owns. Use camera **10** (see “Shared camera”). |
 | `modprobe: FATAL: Module v4l2loopback not found` | Kernel headers didn't match: `sudo apt full-upgrade`, reboot, re-run `sudo ./install.sh`. |
@@ -248,4 +248,4 @@ Video and audio go directly between the doctor's browser and the cart (WebRTC, D
 | Call setup | Realtime DB `/calls/medicart-01` — offer, answer, ICE candidates, status, doctor prompts |
 | Consultation records | console → Firestore `consultations` |
 
-**Second cart:** deploy a copy of `web/` with `CART_ID = 'medicart-02'` and `MQTT.topics` pointing at `<prefix>/02/...`, and build the ESP32 firmware with `TOPIC_SENSORS` / `TOPIC_STATUS` set to `<prefix>/02/...`.
+**Second cart:** deploy a copy of the site with `CART_ID = 'medicart-02'` and `MQTT.topics` pointing at `<prefix>/02/...`, and build the ESP32 firmware with `TOPIC_SENSORS` / `TOPIC_STATUS` set to `<prefix>/02/...`.

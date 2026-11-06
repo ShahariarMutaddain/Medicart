@@ -1,0 +1,5 @@
+# Only the website is published; hardware code and rules stay private.
+firebase/
+esp32_sensor/
+raspberry_pi/
+README.md

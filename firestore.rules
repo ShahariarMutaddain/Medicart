@@ -1,0 +1,25 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Readings logged by the cart screen every 5 s while a finger is on the sensor.
+    match /sensor_history/{id} {
+      allow read, create, delete: if request.auth != null;
+      allow update: if false;
+    }
+
+    // One document per video consultation (written by the doctor console).
+    match /consultations/{id} {
+      allow read: if request.auth != null;
+      allow create: if request.auth != null
+                    && request.resource.data.doctorUid == request.auth.uid;
+      allow update, delete: if request.auth != null
+                    && resource.data.doctorUid == request.auth.uid;
+    }
+
+    // Everything else is closed.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

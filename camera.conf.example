@@ -1,0 +1,9 @@
+# MediCart camera splitter — /etc/medicart/camera.conf
+# auto = first USB camera. Or a fixed path, e.g. /dev/v4l/by-id/usb-046d_C270_HD_WEBCAM-video-index0
+CAMERA_DEVICE=auto
+# mjpeg is light on the CPU; the script falls back to raw and to 640x480 if the camera refuses
+CAMERA_FORMAT=mjpeg
+# keep the size medicart.py was calibrated at (FRAME_WIDTH x FRAME_HEIGHT)
+CAMERA_SIZE=1280x720
+# lower to 15 if the Pi runs hot during calls
+CAMERA_FPS=30

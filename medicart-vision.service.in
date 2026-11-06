@@ -1,0 +1,18 @@
+[Unit]
+Description=MediCart vision safety (YOLOv8 + serial heartbeat to Arduino Mega)
+After=medicart-camera.service
+Wants=medicart-camera.service
+
+[Service]
+Type=simple
+User=@USER@
+SupplementaryGroups=dialout video
+# wait until the splitter is feeding the virtual camera
+ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do [ -e /dev/video10 ] && sleep 2 && exit 0; sleep 1; done; exit 0'
+ExecStart=/opt/medicart/vision/run-vision.sh
+Restart=always
+RestartSec=3
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target
