@@ -1,0 +1,14 @@
+[Unit]
+Description=MediCart camera splitter (one USB camera → MediCart-Vision + MediCart-Call)
+After=systemd-modules-load.service systemd-udev-settle.service
+Wants=systemd-modules-load.service
+
+[Service]
+Type=simple
+ExecStart=/opt/medicart/camera/medicart-camera.sh
+Restart=always
+RestartSec=3
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

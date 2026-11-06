@@ -1,0 +1,7 @@
+# MediCart Raspberry Pi Wi-Fi portal — /etc/medicart/portal.conf
+ADMIN_PASSWORD=medicart-admin
+AP_SSID=MediCart-Cart-Setup
+AP_PASSWORD=medicart-setup
+IFACE=wlan0
+BOOT_GRACE=45
+PORTAL_WINDOW=600

@@ -1,0 +1,187 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MediCart — Cart Screen</title>
+<meta name="theme-color" content="#0A2647">
+<meta name="robots" content="noindex">
+<link rel="icon" type="image/png" href="assets/iub-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,600;9..144,700&family=Noto+Sans+Bengali:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="assets/brand.css">
+<link rel="stylesheet" href="assets/cart.css">
+<script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/shared.js"></script>
+<script src="js/cart.js" defer></script>
+</head>
+<body>
+
+<div class="boot" id="boot"><img src="assets/iub-logo.png" alt=""><div class="boot-bar"></div><div class="boot-msg" id="bootMsg" hidden><b>MediCart couldn't start</b><span id="bootWhy"></span><button class="btn btn-primary btn-sm" onclick="location.reload()">Try again</button></div></div>
+
+<!-- ═════════ One-time cart sign-in ═════════ -->
+<main class="setup" id="setup" hidden>
+  <form class="setup-card" id="setupForm" novalidate>
+    <span class="logo-tile"><img src="assets/iub-logo.png" alt="IUB"></span>
+    <div class="eyebrow">MediCart · cart screen setup</div>
+    <h1 class="display">Sign in this cart</h1>
+    <p>Use the <b>cart account</b> from the Firebase console. This screen stays signed in after restarts.</p>
+    <label class="field"><span>Cart account email</span><input id="setupEmail" type="email" autocomplete="username" required></label>
+    <label class="field"><span>Password</span><input id="setupPass" type="password" autocomplete="current-password" required></label>
+    <p class="setup-msg" id="setupMsg" hidden></p>
+    <button class="btn btn-primary btn-lg" id="setupBtn" type="submit">Sign in &amp; start</button>
+  </form>
+</main>
+
+<!-- ═════════ Idle kiosk ═════════ -->
+<main class="kiosk" id="kiosk" hidden>
+  <header class="k-top">
+    <div class="k-brand">
+      <span class="logo-tile"><img src="assets/iub-logo.png" alt="IUB"></span>
+      <div><b>MediCart</b><span>IUB Robotics Team</span></div>
+    </div>
+    <div class="k-chips">
+      <span class="k-chip" id="chipNet"><i class="dot"></i>Network</span>
+      <span class="k-chip" id="chipSensor"><i class="dot"></i>Sensor</span>
+      <span class="k-chip" id="chipCam"><i class="dot"></i>Camera</span>
+      <span class="k-cam" id="kSelfWrap"><video id="selfPreview" autoplay playsinline muted></video><i></i></span>
+      <time class="k-clock" id="clock">--:--</time>
+    </div>
+  </header>
+
+  <section class="k-body">
+    <div class="k-welcome">
+      <div class="k-team">
+        <img src="assets/avatars/doctor.svg" alt="Doctor">
+        <img src="assets/avatars/nurse.svg" alt="Nurse">
+      </div>
+      <h1 class="display">Hello! I’m MediCart.</h1>
+      <p class="bn k-bn-h">হ্যালো! আমি মেডিকার্ট।</p>
+      <p class="k-lead">A doctor can see and talk to you through this screen.</p>
+      <p class="bn k-bn">এই স্ক্রিনের মাধ্যমে ডাক্তার আপনাকে দেখতে ও আপনার সাথে কথা বলতে পারবেন।</p>
+      <div class="k-wait" id="kWait"><i></i><span id="kWaitText">Waiting for a doctor to call</span></div>
+    </div>
+
+    <div class="k-vitals">
+      <div class="k-instr" id="kInstr" data-tone="idle">
+        <svg viewBox="0 0 48 48" aria-hidden="true"><path d="M20 44V22a4 4 0 0 1 8 0v8l8 2a4 4 0 0 1 3 4.6L37 44" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"/><path d="M14 14a10 10 0 0 1 20 0" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" opacity=".5"/><path d="M8 14a16 16 0 0 1 32 0" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" opacity=".25"/></svg>
+        <div><b id="kInstrEn">Place your fingertip on the sensor</b><span class="bn" id="kInstrBn">সেন্সরে আপনার আঙুলের ডগা রাখুন</span></div>
+      </div>
+      <div class="k-meters">
+        <div class="k-meter" style="--k: var(--hr)">
+          <span class="k-label">Heart rate <span class="bn">· হৃদস্পন্দন</span></span>
+          <div class="k-num"><span id="kHR">--</span><small>BPM</small></div>
+        </div>
+        <div class="k-meter" style="--k: var(--spo2)">
+          <span class="k-label">Blood oxygen <span class="bn">· রক্তে অক্সিজেন</span></span>
+          <div class="k-num"><span id="kSp">--</span><small>%</small></div>
+        </div>
+      </div>
+      <div class="k-progress"><div class="k-steps" id="kSteps"><i></i><i></i><i></i><i></i></div><span id="kStepText">Waiting for your finger</span></div>
+    </div>
+  </section>
+
+  <button class="k-gear" id="gearBtn" aria-label="Settings — press and hold"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 1 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 1 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 1 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 1 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg><i class="hold-ring" id="holdRing"></i></button>
+</main>
+
+<!-- ═════════ Incoming call ═════════ -->
+<div class="incoming" id="incoming" hidden>
+  <div class="inc-card">
+    <div class="inc-rings"><img src="assets/avatars/doctor.svg" alt=""></div>
+    <div class="inc-label">Incoming video call <span class="bn">· ভিডিও কল আসছে</span></div>
+    <h2 class="display" id="incName">Doctor</h2>
+    <p class="inc-auto" id="incAuto">&nbsp;</p>
+    <div class="inc-actions">
+      <button class="inc-btn inc-decline" id="declineBtn"><svg viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg><span>Decline<em class="bn">কেটে দিন</em></span></button>
+      <button class="inc-btn inc-answer" id="answerBtn"><svg viewBox="0 0 24 24"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg><span>Answer<em class="bn">কল ধরুন</em></span></button>
+    </div>
+  </div>
+</div>
+
+<!-- ═════════ In call ═════════ -->
+<main class="call" id="call" hidden>
+  <video id="remoteVideo" autoplay playsinline></video>
+  <div class="call-doc"><img src="assets/avatars/doctor.svg" alt=""><div><b id="callDocName">Doctor</b><span class="mono" id="callTimer">00:00</span></div></div>
+  <div class="call-prompt" id="callPrompt" hidden><b id="promptEn"></b><span class="bn" id="promptBn"></span></div>
+  <div class="call-vitals">
+    <div><span>HR</span><b id="cHR">--</b><small>BPM</small></div>
+    <div><span>SpO₂</span><b id="cSp">--</b><small>%</small></div>
+  </div>
+  <div class="call-self"><video id="callSelf" autoplay playsinline muted></video></div>
+  <div class="call-conn" id="callConn"><i></i><span id="callConnText">Connecting to the doctor…</span></div>
+  <button class="call-end" id="endBtn"><svg viewBox="0 0 24 24"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M23 1L1 23"/></svg>End call <span class="bn">· কল শেষ করুন</span></button>
+  <button class="tap-sound" id="tapSound" hidden>Tap to hear the doctor · ডাক্তারের কথা শুনতে ট্যাপ করুন</button>
+</main>
+
+<!-- ═════════ Settings (press & hold the gear) ═════════ -->
+<div class="settings" id="settings" hidden>
+  <div class="set-card" role="dialog" aria-label="Cart settings">
+    <header><h2 class="display">Cart settings</h2><button class="btn btn-sm" id="setClose">Close</button></header>
+    <label class="field"><span>Telemedicine camera (default: MediCart-Call)</span><select id="setCam"></select></label>
+    <label class="field"><span>Microphone</span><select id="setMic"></select></label>
+    <label class="field" id="setSpkWrap"><span>Speaker</span><select id="setSpk"></select></label>
+    <label class="field"><span>Auto-answer incoming calls</span>
+      <select id="setAuto"><option value="0">Off — patient taps Answer</option><option value="3">After 3 seconds</option><option value="5">After 5 seconds</option><option value="10">After 10 seconds</option></select>
+    </label>
+    <div class="set-actions">
+      <button class="btn" id="setTest">Test speaker</button>
+      <button class="btn" id="setReload">Reload screen</button>
+      <button class="btn btn-danger" id="setSignOut">Sign out cart</button>
+    </div>
+    <dl class="set-info">
+      <div><dt>Cart</dt><dd id="setCartId">—</dd></div>
+      <div><dt>Account</dt><dd id="setAccount">—</dd></div>
+      <div><dt>Version</dt><dd id="setVersion">—</dd></div>
+      <div><dt>Readings logged</dt><dd id="setLogged">0</dd></div>
+    </dl>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<!-- Firebase loader. Inline on purpose: browsers refuse module *files* when a page is opened
+     from disk (file://), but an inline module importing from gstatic works everywhere. -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import * as A from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import * as D from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import * as F from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+const app = initializeApp(window.MC_CONFIG.FIREBASE_CONFIG);
+window.MC_FB = {
+  app, auth: A.getAuth(app), rtdb: D.getDatabase(app), db: F.getFirestore(app),
+  onAuthStateChanged: A.onAuthStateChanged, signInWithEmailAndPassword: A.signInWithEmailAndPassword,
+  signOut: A.signOut, sendPasswordResetEmail: A.sendPasswordResetEmail, updateProfile: A.updateProfile,
+  ref: D.ref, set: D.set, update: D.update, get: D.get, push: D.push, remove: D.remove,
+  onValue: D.onValue, onChildAdded: D.onChildAdded, onDisconnect: D.onDisconnect, serverTimestamp: D.serverTimestamp,
+  collection: F.collection, addDoc: F.addDoc, getDocs: F.getDocs, query: F.query, orderBy: F.orderBy,
+  limit: F.limit, writeBatch: F.writeBatch, fsTimestamp: F.serverTimestamp, Timestamp: F.Timestamp,
+};
+window.MC.initServerClock(window.MC_FB);
+window.dispatchEvent(new Event('mc-ready'));
+</script>
+<script>
+// If something above can't load (offline, blocked CDN), say so instead of spinning forever.
+(function () {
+  var shown = false;
+  function fail(why) {
+    var b = document.getElementById('boot');
+    if (shown || !b || b.hidden) return;
+    shown = true;
+    document.getElementById('bootWhy').textContent = why;
+    document.getElementById('bootMsg').hidden = false;
+    b.classList.add('boot-failed');
+  }
+  window.addEventListener('error', function (e) {
+    var t = e.target;
+    if (t && t.tagName === 'SCRIPT' && t.src) fail('Could not load ' + new URL(t.src).hostname + ' — check the internet connection.');
+  }, true);
+  setTimeout(function () {
+    if (!window.MC_CONFIG || !window.MC) fail('The app files did not load. Make sure the js/ folder sits next to this page.');
+    else if (!window.MC_FB) fail('Firebase could not be reached — check the internet connection (www.gstatic.com).');
+    else fail('Firebase is taking too long to respond.');
+  }, 15000);
+})();
+</script>
+</body>
+</html>

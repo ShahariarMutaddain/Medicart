@@ -1,0 +1,29 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+
+    "medicart": {
+      "live": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+
+    "carts": {
+      "$cartId": {
+        ".read": "auth != null",
+        ".write": "auth != null"
+      }
+    },
+
+    "calls": {
+      "$cartId": {
+        ".read": "auth != null",
+        ".write": "auth != null",
+        "offerCandidates": { ".indexOn": ["callId"] },
+        "answerCandidates": { ".indexOn": ["callId"] }
+      }
+    }
+  }
+}

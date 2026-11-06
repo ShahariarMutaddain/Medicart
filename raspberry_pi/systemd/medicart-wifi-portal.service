@@ -1,0 +1,13 @@
+[Unit]
+Description=MediCart Wi-Fi setup portal (opens a hotspot when no Wi-Fi is available)
+After=NetworkManager.service
+Wants=NetworkManager.service
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 /opt/medicart/wifi-portal/medicart-wifi-portal.py
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

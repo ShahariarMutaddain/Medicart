@@ -1,0 +1,2 @@
+# MediCart cart screen — /etc/medicart/kiosk.conf
+KIOSK_URL=https://YOUR-PROJECT.vercel.app/cart
