@@ -394,6 +394,16 @@ svg { stroke-linecap: round; stroke-linejoin: round; }
 .set-info dt { font-size: 11px; color: var(--text-3); }
 .set-info dd { margin: 0; font-size: 13px; font-weight: 600; overflow-wrap: anywhere; }
 
+
+/* ─── Drive mode banner (manual driving / emergency stop) ───── */
+.k-drive { position: fixed; z-index: 40; left: 50%; bottom: max(14px, env(safe-area-inset-bottom, 0px)); transform: translateX(-50%);
+  display: inline-flex; align-items: center; gap: 10px; max-width: calc(100vw - 32px); padding: 10px 18px; border-radius: 999px;
+  background: #B45309; color: #fff; box-shadow: 0 10px 30px -8px rgba(0, 0, 0, .45); font-size: clamp(14px, 2.4vh, 18px); white-space: nowrap; overflow: hidden; }
+.k-drive i { width: 12px; height: 12px; border-radius: 50%; background: #FFD43B; flex: none; animation: breathe 1.4s var(--ease-in-out) infinite; }
+.k-drive .bn { font-family: var(--ff-bn); opacity: .92; }
+.k-drive small { font-size: .78em; opacity: .85; overflow: hidden; text-overflow: ellipsis; }
+.k-drive.stop { background: #C41E2A; }
+
 </style>
 <script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
 <script>/* ═══ js/config.js ═══ */
@@ -820,6 +830,8 @@ window.MC = {
 </div>
 
 <!-- ═════════ In call ═════════ -->
+<div class="k-drive" id="kDrive" hidden role="status" aria-live="polite"><i></i><b id="kDriveEn">Manual driving</b><span class="bn" id="kDriveBn">ম্যানুয়াল চালনা</span><small id="kDriveBy"></small></div>
+
 <main class="call" id="call" hidden>
   <video id="remoteVideo" autoplay playsinline></video>
   <div class="call-doc"><img src="data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAxMjAgMTIwIiByb2xlPSJpbWciIGFyaWEtbGFiZWw9IkRvY3RvciI+CiAgPGRlZnM+PGNsaXBQYXRoIGlkPSJjIj48Y2lyY2xlIGN4PSI2MCIgY3k9IjYwIiByPSI2MCIvPjwvY2xpcFBhdGg+PC9kZWZzPgogIDxnIGNsaXAtcGF0aD0idXJsKCNjKSI+CiAgICA8cmVjdCB3aWR0aD0iMTIwIiBoZWlnaHQ9IjEyMCIgZmlsbD0iI0RDRTZGNCIvPgogICAgPGNpcmNsZSBjeD0iOTYiIGN5PSIyMiIgcj0iMzAiIGZpbGw9IiNDOUQ4RUUiLz4KICAgIDxwYXRoIGQ9Ik01MiA2NGgxNnYyMkg1MnoiIGZpbGw9IiNBODZCNDciLz4KICAgIDxwYXRoIGQ9Ik0xMiAxMjBjMC0yMiAxOC0zNiA0OC0zNnM0OCAxNCA0OCAzNnoiIGZpbGw9IiNGQkZDRkUiLz4KICAgIDxwYXRoIGQ9Ik00OCA4NGwxMiAyMCAxMi0yMHoiIGZpbGw9IiM5REI4RTAiLz4KICAgIDxwYXRoIGQ9Ik01Ny41IDg3aDVsLTEuMiAxMy0xLjMgNC0xLjMtNHoiIGZpbGw9IiMwQTI2NDciLz4KICAgIDxwYXRoIGQ9Ik00NyA4NGwxMyAyMC03IDE2SDQwbC00LTMweiIgZmlsbD0iI0VERjFGNyIvPgogICAgPHBhdGggZD0iTTczIDg0bC0xMyAyMCA3IDE2aDEzbDQtMzB6IiBmaWxsPSIjRURGMUY3Ii8+CiAgICA8cGF0aCBkPSJNNDcgODVjLTcgMTQtNSAyNCA1IDI3IiBmaWxsPSJub25lIiBzdHJva2U9IiNDODg2MUIiIHN0cm9rZS13aWR0aD0iMyIgc3Ryb2tlLWxpbmVjYXA9InJvdW5kIi8+CiAgICA8cGF0aCBkPSJNNzMgODVjNiAxMCA2IDE3IDEgMjIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iI0M4ODYxQiIgc3Ryb2tlLXdpZHRoPSIzIiBzdHJva2UtbGluZWNhcD0icm91bmQiLz4KICAgIDxjaXJjbGUgY3g9IjczIiBjeT0iMTA5IiByPSI1IiBmaWxsPSIjQzg4NjFCIi8+PGNpcmNsZSBjeD0iNzMiIGN5PSIxMDkiIHI9IjIuNCIgZmlsbD0iI0YzRDA4QyIvPgogICAgPHJlY3QgeD0iMzEiIHk9Ijk4IiB3aWR0aD0iMTEiIGhlaWdodD0iOCIgcng9IjEuNSIgZmlsbD0iIzBBMjY0NyIvPjxyZWN0IHg9IjMxIiB5PSI5OCIgd2lkdGg9IjExIiBoZWlnaHQ9IjIuNCIgZmlsbD0iI0U2QTUzNyIvPgogICAgPGVsbGlwc2UgY3g9IjQzIiBjeT0iNTIiIHJ4PSI0IiByeT0iNSIgZmlsbD0iI0E4NkI0NyIvPjxlbGxpcHNlIGN4PSI3NyIgY3k9IjUyIiByeD0iNCIgcnk9IjUiIGZpbGw9IiNBODZCNDciLz4KICAgIDxlbGxpcHNlIGN4PSI2MCIgY3k9IjUwIiByeD0iMTciIHJ5PSIyMCIgZmlsbD0iI0JGODI1QSIvPgogICAgPHBhdGggZD0iTTQyLjUgNDdjLTEtMTQgNy0yMiAxOC0yMiAxMiAwIDE5IDggMTcuNSAyMi0zLTctOS0xMC0xNy41LTEwUzQ1LjUgNDAgNDIuNSA0N3oiIGZpbGw9IiMxQzE3MTQiLz4KICAgIDxyZWN0IHg9IjQ3LjUiIHk9IjQ1LjUiIHdpZHRoPSIxMC41IiBoZWlnaHQ9IjgiIHJ4PSIzLjIiIGZpbGw9Im5vbmUiIHN0cm9rZT0iIzBBMjY0NyIgc3Ryb2tlLXdpZHRoPSIxLjgiLz4KICAgIDxyZWN0IHg9IjYyIiB5PSI0NS41IiB3aWR0aD0iMTAuNSIgaGVpZ2h0PSI4IiByeD0iMy4yIiBmaWxsPSJub25lIiBzdHJva2U9IiMwQTI2NDciIHN0cm9rZS13aWR0aD0iMS44Ii8+CiAgICA8cGF0aCBkPSJNNTggNDloNCIgc3Ryb2tlPSIjMEEyNjQ3IiBzdHJva2Utd2lkdGg9IjEuOCIvPgogICAgPGNpcmNsZSBjeD0iNTMiIGN5PSI0OS42IiByPSIxLjYiIGZpbGw9IiMxQzE3MTQiLz48Y2lyY2xlIGN4PSI2NyIgY3k9IjQ5LjYiIHI9IjEuNiIgZmlsbD0iIzFDMTcxNCIvPgogICAgPHBhdGggZD0iTTU0IDYwLjVxNiA0LjUgMTIgMCIgZmlsbD0ibm9uZSIgc3Ryb2tlPSIjNkUzRjI3IiBzdHJva2Utd2lkdGg9IjIiIHN0cm9rZS1saW5lY2FwPSJyb3VuZCIvPgogIDwvZz4KPC9zdmc+Cg==" alt=""><div><b id="callDocName">Doctor</b><span class="mono" id="callTimer">00:00</span></div></div>
@@ -861,7 +873,7 @@ window.MC = {
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <!-- Firebase loader. Inline on purpose: browsers refuse module *files* when a page is opened
      from disk (file://), but an inline module importing from gstatic works everywhere. -->
-<script>/* ═══ js/cart.js (runs after the page markup, like defer) ═══ */
+<script>/* ═══ js/cart.js (after the page markup, like defer) ═══ */
 // ════════════════════════════════════════════════════════════════
 //  MediCart — cart screen (runs on the Raspberry Pi in kiosk mode)
 //  Presence · answers doctor calls (WebRTC callee) · shows vitals ·
@@ -959,6 +971,7 @@ async function start() {
   await acquireMedia();
   startPresence();
   startSignalling();
+  startDriveBanner();
   startSensor();
   setInterval(renderChips, 2000);
   navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (!S.call) acquireMedia({ quiet: true }); });
@@ -1174,6 +1187,25 @@ function renderChips() {
 // ════════════════════════════════════════════════════════════════
 function startSignalling() {
   onValue(ref(rtdb, callPath), (snap) => onCallNode(snap.val()));
+}
+
+// Drive mode banner: tells people near the cart that someone is driving it by hand,
+// or that the emergency stop is on (state written by medicart-control on the Pi).
+function startDriveBanner() {
+  let st = null;
+  const show = () => {
+    const fresh = st && st.updatedAt && serverNow() - st.updatedAt < 6000;
+    const box = el('kDrive');
+    if (!fresh || st.mode === 'AUTO') { box.hidden = true; return; }
+    const stop = st.mode === 'STOP';
+    box.classList.toggle('stop', stop);
+    el('kDriveEn').textContent = stop ? 'Emergency stop' : 'Manual driving';
+    el('kDriveBn').textContent = stop ? 'জরুরি থামানো' : 'ম্যানুয়াল চালনা';
+    el('kDriveBy').textContent = stop ? '' : (st.driver ? `· ${st.driver}` : '');
+    box.hidden = false;
+  };
+  onValue(ref(rtdb, `carts/${CART_ID}/control/state`), (snap) => { st = snap.val(); show(); });
+  setInterval(show, 2000);
 }
 
 function onCallNode(d) {

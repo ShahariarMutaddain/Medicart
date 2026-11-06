@@ -1,0 +1,21 @@
+[Unit]
+Description=MediCart drive controller (manual + autonomous; owns the Arduino serial port)
+After=network-online.target
+Wants=network-online.target
+Before=medicart-vision.service
+
+[Service]
+Type=simple
+User=@USER@
+SupplementaryGroups=dialout
+# secrets live here, readable by root only; systemd reads it before dropping to @USER@
+EnvironmentFile=/etc/medicart/control.env
+RuntimeDirectory=medicart
+RuntimeDirectoryPreserve=yes
+ExecStart=/usr/bin/python3 /opt/medicart/control/medicart_control.py
+Restart=always
+RestartSec=2
+Nice=-5
+
+[Install]
+WantedBy=multi-user.target

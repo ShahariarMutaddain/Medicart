@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" role="img" aria-label="Nurse">
+  <defs><clipPath id="c"><circle cx="60" cy="60" r="60"/></clipPath></defs>
+  <g clip-path="url(#c)">
+    <rect width="120" height="120" fill="#EADFF5"/>
+    <circle cx="22" cy="24" r="28" fill="#DCCBEE"/>
+    <path d="M40 40c0-16 9-24 20-24s20 8 20 24v34H40z" fill="#241A16"/>
+    <path d="M52 66h16v20H52z" fill="#B57650"/>
+    <path d="M12 120c0-22 18-35 48-35s48 13 48 35z" fill="#5B2C8E"/>
+    <path d="M49 85l11 15 11-15z" fill="#B57650"/>
+    <path d="M49 85l11 15 11-15" fill="none" stroke="#47206F" stroke-width="2.5"/>
+    <rect x="70" y="100" width="12" height="9" rx="1.5" fill="#FFFFFF"/><rect x="70" y="100" width="12" height="2.6" fill="#E6A537"/>
+    <rect x="37" y="99" width="3" height="11" rx="1.5" fill="#E6A537"/>
+    <ellipse cx="43.5" cy="53" rx="3.6" ry="4.6" fill="#B57650"/><ellipse cx="76.5" cy="53" rx="3.6" ry="4.6" fill="#B57650"/>
+    <ellipse cx="60" cy="51" rx="16.5" ry="19.5" fill="#CC8F65"/>
+    <path d="M43.5 49c0-13 7-19 16.5-19S76.5 36 76.5 49c-4-7-9-9.5-16.5-9.5S47.5 42 43.5 49z" fill="#241A16"/>
+    <path d="M46 31h28l-3-9H49z" fill="#FFFFFF"/>
+    <path d="M58.6 23.6h2.8v2.4h2.4v2.8h-2.4v2.4h-2.8v-2.4h-2.4V26h2.4z" fill="#5B2C8E"/>
+    <circle cx="53.5" cy="51" r="1.7" fill="#241A16"/><circle cx="66.5" cy="51" r="1.7" fill="#241A16"/>
+    <path d="M51 47.4q2.5-1.6 5 0M64 47.4q2.5-1.6 5 0" fill="none" stroke="#241A16" stroke-width="1.3" stroke-linecap="round"/>
+    <ellipse cx="50" cy="57" rx="3" ry="1.8" fill="#E39A86" opacity=".55"/><ellipse cx="70" cy="57" rx="3" ry="1.8" fill="#E39A86" opacity=".55"/>
+    <path d="M54.5 60.5q5.5 4.5 11 0" fill="none" stroke="#7A3F2B" stroke-width="2" stroke-linecap="round"/>
+  </g>
+</svg>

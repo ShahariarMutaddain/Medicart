@@ -1,5 +1,7 @@
 # MediCart — IUB Robotics Team
 
+> **New: drive control (Auto / Manual / Emergency stop).** See [`CONTROL_SYSTEM.md`](CONTROL_SYSTEM.md). Hardware setup: [`HARDWARE_SETUP.md`](HARDWARE_SETUP.md).
+
 Unified system for the MediCart autonomous medical cart:
 
 - **Doctor console** (web): sign-in, live heart rate / SpO₂, trends, video consultation with the patient, consultation notes and records.
@@ -39,8 +41,8 @@ Both get the same live picture at the same time, so obstacle detection keeps run
 
 | Path | What it is |
 |---|---|
-| `index.html`, `cart.html`, `js/`, `assets/`, `vercel.json` | The website, at the top of the repo so Vercel serves it with default settings. `index.html` = doctor console, `cart.html` = cart screen. |
-| `js/config.js` | **The one file you edit**: Firebase project, MQTT broker, cart ID, TURN servers. |
+| `index.html`, `cart.html`, `vercel.json` | The website. Each page is **self-contained** (styles, logo, settings and app code are inside it). `index.html` = doctor console, `cart.html` = cart screen. |
+| Settings block in `index.html` **and** `cart.html` (search `MediCart — shared configuration`) | **The one file you edit**: Firebase project, MQTT broker, cart ID, TURN servers. |
 | `firebase/` | Security rules for Realtime Database and Firestore. |
 | `esp32_sensor/medicart_sensor/` | Arduino sketch for the ESP32 sensor board. |
 | `esp32_sensor/prebuilt/` | Ready-to-flash firmware (`…_merged.bin`, flash at address `0x0`). |
@@ -82,7 +84,7 @@ iub-medicart-591a7e01d2/01/status      ← online/offline, IP, Wi-Fi signal (ret
 ```
 
 Treat that prefix like a password: anyone who knows it can read the readings or send fake ones. It lives in two places, and they must match:
-- `js/config.js` → `MQTT_TOPIC_PREFIX`
+- `the settings block in index.html and cart.html` → `MQTT_TOPIC_PREFIX`
 - `esp32_sensor/medicart_sensor/medicart_sensor.ino` → `TOPIC_PREFIX`
 
 To change it, edit both, re-flash the ESP32 and redeploy the website.
@@ -209,7 +211,7 @@ No hardware yet? **Demo data** in the console's top bar simulates the sensor (no
 |---|---|
 | Stuck on the loading screen / **“MediCart couldn't start”** | The message says what failed. Usually no internet (Firebase loads from www.gstatic.com), or the `js/` folder isn't next to `index.html`. |
 | Console says **Cart offline** | Cart screen not on or not signed in. On the Pi: is Chromium showing `/cart`? Check `/etc/medicart/kiosk.conf`. |
-| Call rings, cart answers, then **Connection failed** | Doctor and cart are on networks that block direct connections (common on campus Wi-Fi ↔ mobile data). Add a TURN server to `ICE_SERVERS` in `js/config.js` (e.g. a free Metered.ca or Cloudflare TURN account) and redeploy. The console's stats chip shows `relay` when TURN is in use. |
+| Call rings, cart answers, then **Connection failed** | Doctor and cart are on networks that block direct connections (common on campus Wi-Fi ↔ mobile data). Add a TURN server to `ICE_SERVERS` in `the settings block in index.html and cart.html` (e.g. a free Metered.ca or Cloudflare TURN account) and redeploy. The console's stats chip shows `relay` when TURN is in use. |
 | Cart shows **No camera** | `systemctl status medicart-camera`. Webcam unplugged, or `v4l2loopback` not loaded (`sudo modprobe v4l2loopback`, then restart the service). The cart screen picks the camera back up by itself within ~15 s. |
 | `medicart.py`: “Could not open camera 0” / device busy | It is opening the real camera, which the splitter owns. Use camera **10** (see “Shared camera”). |
 | `modprobe: FATAL: Module v4l2loopback not found` | Kernel headers didn't match: `sudo apt full-upgrade`, reboot, re-run `sudo ./install.sh`. |

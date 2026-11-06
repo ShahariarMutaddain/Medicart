@@ -1,0 +1,527 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>MediCart Console — IUB Robotics Team</title>
+<meta name="description" content="Clinician console for MediCart, the autonomous medical cart of Independent University, Bangladesh: live vitals and telemedicine.">
+<meta name="theme-color" content="#0A2647">
+<link rel="icon" type="image/png" href="assets/iub-logo.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&family=Fraunces:opsz,wght@9..144,500;9..144,600;9..144,700&display=swap">
+<link rel="stylesheet" href="assets/brand.css">
+<link rel="stylesheet" href="assets/console.css">
+<script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
+<script src="js/config.js"></script>
+<script src="js/shared.js"></script>
+<script src="js/console.js" defer></script>
+</head>
+<body>
+
+<div class="boot" id="boot"><img src="assets/iub-logo.png" alt=""><div class="boot-bar"></div><div class="boot-msg" id="bootMsg" hidden><b>MediCart couldn't start</b><span id="bootWhy"></span><button class="btn btn-primary btn-sm" onclick="location.reload()">Try again</button></div></div>
+
+<!-- ═════════════ SIGN IN ═════════════ -->
+<main class="login" id="login" hidden>
+  <section class="login-brand">
+    <header class="login-top">
+      <span class="logo-tile"><img src="assets/iub-logo.png" alt="Independent University, Bangladesh"></span>
+      <div>
+        <div class="eyebrow eyebrow-gold">IUB Robotics Team</div>
+        <div class="login-word">MediCart</div>
+      </div>
+    </header>
+    <div class="login-copy">
+      <h1 class="display">Care that comes<br>to the patient.</h1>
+      <p>Live vital signs and face-to-face video consultation from MediCart — the autonomous medical cart of Independent University, Bangladesh.</p>
+    </div>
+    <figure class="team">
+      <div class="team-row">
+        <img class="team-av" src="assets/avatars/doctor.svg" alt="Doctor">
+        <img class="team-av" src="assets/avatars/nurse.svg" alt="Nurse">
+        <img class="team-av team-cart" src="assets/avatars/medicart.svg" alt="MediCart">
+        <img class="team-av" src="assets/avatars/patient.svg" alt="Patient">
+      </div>
+      <figcaption>Doctor · Nurse · MediCart · Patient</figcaption>
+    </figure>
+    <footer class="login-motto">Teacheth man that which he knew not</footer>
+  </section>
+
+  <section class="login-panel">
+    <form class="login-form" id="loginForm" novalidate>
+      <div class="eyebrow">Clinician access</div>
+      <h2 class="display">Sign in to the console</h2>
+      <label class="field"><span>Email</span><input id="loginEmail" type="email" autocomplete="username" required></label>
+      <label class="field"><span>Password</span><input id="loginPass" type="password" autocomplete="current-password" required></label>
+      <p class="form-msg" id="loginMsg" hidden></p>
+      <button class="btn btn-primary btn-lg" type="submit" id="loginBtn">Sign in</button>
+      <button class="link-btn" type="button" id="forgotBtn">Forgot password?</button>
+      <p class="form-note">Accounts are issued by the MediCart administrator. Video calls run peer-to-peer and are encrypted in transit.</p>
+    </form>
+  </section>
+</main>
+
+<!-- ═════════════ APP ═════════════ -->
+<div class="app" id="app" hidden>
+  <aside class="rail" id="rail">
+    <div class="rail-brand">
+      <span class="logo-tile sm"><img src="assets/iub-logo.png" alt="IUB"></span>
+      <div>
+        <div class="rail-word">MediCart</div>
+        <div class="rail-sub">IUB Robotics Team</div>
+      </div>
+    </div>
+    <nav class="rail-nav" id="nav">
+      <div class="rail-label">Monitor</div>
+      <a href="#overview" data-page="overview"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Overview</a>
+      <a href="#vitals" data-page="vitals"><svg viewBox="0 0 24 24"><path d="M22 12h-4l-3 8L9 4l-3 8H2"/></svg>Vitals</a>
+      <div class="rail-label">Telemedicine</div>
+      <a href="#consult" data-page="consult"><svg viewBox="0 0 24 24"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>Consult<span class="rail-badge" id="navLive" hidden>LIVE</span></a>
+      <a href="#records" data-page="records"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>Records</a>
+      <div class="rail-label">Robot</div>
+      <a href="#drive" data-page="drive"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v6.5M4.2 16.5l5.6-3.2M19.8 16.5l-5.6-3.2"/></svg>Drive<span class="rail-badge" id="navDrive" hidden>MANUAL</span></a>
+      <div class="rail-label">Engineering</div>
+      <a href="#stream" data-page="stream"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Data stream</a>
+      <a href="#system" data-page="system"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01"/></svg>System</a>
+    </nav>
+    <div class="rail-status">
+      <div class="rs-row"><i class="dot" id="rsCart"></i><span id="rsCartText">Cart offline</span></div>
+      <div class="rs-row"><i class="dot" id="rsSensor"></i><span id="rsSensorText">Sensor offline</span></div>
+      <div class="rs-row"><i class="dot" id="rsLink"></i><span id="rsLinkText">Live link off</span></div>
+      <div class="rs-row"><i class="dot" id="rsDrive"></i><span id="rsDriveText">Drive controller offline</span></div>
+    </div>
+  </aside>
+  <div class="scrim" id="scrim"></div>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn menu-btn" id="menuBtn" aria-label="Open navigation"><svg viewBox="0 0 24 24"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+      <h1 class="topbar-title" id="pageTitle">Overview</h1>
+      <span class="pill" id="linkPill"><i class="dot"></i><span id="linkPillText">Connecting</span></span>
+      <div class="grow"></div>
+      <button class="btn btn-ghost btn-sm" id="demoBtn" title="Simulate sensor data">Demo data</button>
+      <div class="user-chip">
+        <img src="assets/avatars/doctor.svg" alt="">
+        <div class="user-meta"><b id="userName">—</b><span id="userEmail"></span></div>
+      </div>
+      <button class="icon-btn" id="signOutBtn" aria-label="Sign out" title="Sign out"><svg viewBox="0 0 24 24"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg></button>
+    </header>
+
+    <div class="pages">
+
+      <!-- OVERVIEW -->
+      <section class="page" id="page-overview" data-title="Overview">
+        <div class="greet">
+          <div>
+            <div class="eyebrow" id="greetDate">—</div>
+            <h2 class="display greet-title" id="greetText">Welcome</h2>
+          </div>
+          <a class="btn btn-gold btn-lg" href="#consult"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>Start consultation</a>
+        </div>
+
+        <div class="card loop">
+          <div class="card-head">
+            <h3>Care loop</h3>
+            <span class="muted sm">Every link between you and the patient, live</span>
+          </div>
+          <ol class="loop-track">
+            <li class="node is-on" id="nodeYou"><img src="assets/avatars/doctor.svg" alt=""><b>You</b><span>Signed in</span></li>
+            <li class="edge" id="edgeLink"><span id="edgeLinkText">Cloud link</span></li>
+            <li class="node" id="nodeCart"><img src="assets/avatars/medicart.svg" alt=""><b id="nodeCartName">MediCart</b><span id="nodeCartText">Offline</span></li>
+            <li class="edge" id="edgeSensor"><span id="edgeSensorText">Sensor</span></li>
+            <li class="node" id="nodePatient"><img src="assets/avatars/patient.svg" alt=""><b>Patient</b><span id="nodePatientText">Not on sensor</span></li>
+          </ol>
+        </div>
+
+        <div class="kpis">
+          <article class="kpi" style="--k: var(--hr)">
+            <div class="kpi-top"><span class="eyebrow">Heart rate</span><span class="pill" id="kHRPill">No reading</span></div>
+            <div class="kpi-val"><span class="num" id="kHR">--</span><small>BPM</small></div>
+            <div class="kpi-foot muted sm">Typical resting 60–100</div>
+          </article>
+          <article class="kpi" style="--k: var(--spo2)">
+            <div class="kpi-top"><span class="eyebrow">SpO₂</span><span class="pill" id="kSpPill">No reading</span></div>
+            <div class="kpi-val"><span class="num" id="kSp">--</span><small>%</small></div>
+            <div class="kpi-foot muted sm">Typical ≥ 95</div>
+          </article>
+          <article class="kpi" style="--k: var(--ir)">
+            <div class="kpi-top"><span class="eyebrow">IR signal</span><span class="pill" id="kIRPill">—</span></div>
+            <div class="kpi-val"><span class="num" id="kIR">--</span></div>
+            <div class="kpi-foot muted sm">Finger threshold 50,000</div>
+          </article>
+          <article class="kpi" style="--k: var(--gold)">
+            <div class="kpi-top"><span class="eyebrow">Measurement</span></div>
+            <div class="kpi-val kpi-state" id="kState">Offline</div>
+            <div class="steps" id="kSteps"><i></i><i></i><i></i><i></i></div>
+          </article>
+        </div>
+
+        <div class="grid-2">
+          <article class="card">
+            <div class="card-head"><h3>Recent consultations</h3><a class="link-btn sm" href="#records">All records</a></div>
+            <ul class="recent" id="recentList"><li class="empty">No consultations yet.</li></ul>
+          </article>
+          <article class="card">
+            <div class="card-head"><h3>Care team</h3><span class="muted sm">Who does what around MediCart</span></div>
+            <ul class="roles">
+              <li><img src="assets/avatars/doctor.svg" alt=""><div><b>Physician</b><span>Reviews vitals remotely and runs the video consultation from this console.</span></div></li>
+              <li><img src="assets/avatars/nurse.svg" alt=""><div><b>Nurse</b><span>Helps the patient at the cart — positions the finger sensor and the camera.</span></div></li>
+              <li><img src="assets/avatars/patient.svg" alt=""><div><b>Patient</b><span>Places a fingertip on the MAX30105 sensor and talks to the doctor on screen.</span></div></li>
+              <li><img src="assets/avatars/medicart.svg" alt=""><div><b>MediCart</b><span>Follows the line to the station, stops for people within 1 m, carries camera, mic, speaker and sensor.</span></div></li>
+            </ul>
+          </article>
+        </div>
+      </section>
+
+      <!-- VITALS -->
+      <section class="page" id="page-vitals" data-title="Vitals">
+        <div class="vbig">
+          <article class="vcard" style="--k: var(--hr)">
+            <span class="eyebrow">Heart rate</span>
+            <div class="vnum"><span class="num" id="vHR">--</span><small>BPM</small></div>
+            <span class="pill" id="vHRPill">No reading</span>
+          </article>
+          <article class="vcard" style="--k: var(--spo2)">
+            <span class="eyebrow">Blood oxygen · SpO₂</span>
+            <div class="vnum"><span class="num" id="vSp">--</span><small>%</small></div>
+            <span class="pill" id="vSpPill">No reading</span>
+          </article>
+          <article class="vcard vcard-meta">
+            <dl class="kv">
+              <div><dt>Finger</dt><dd id="vFinger">—</dd></div>
+              <div><dt>Sensor state</dt><dd id="vState">—</dd></div>
+              <div><dt>Samples</dt><dd id="vSamples">0 / 4</dd></div>
+              <div><dt>Last packet</dt><dd id="vLast">—</dd></div>
+              <div><dt>Source</dt><dd id="vSource">—</dd></div>
+            </dl>
+          </article>
+        </div>
+
+        <div class="section-head">
+          <h3>Trends</h3>
+          <div class="seg" id="winSeg" role="tablist">
+            <button data-win="60" class="on">1 min</button><button data-win="300">5 min</button><button data-win="900">15 min</button><button data-win="1800">30 min</button>
+          </div>
+        </div>
+        <div class="charts">
+          <article class="chart-card"><header><b style="color: var(--hr)">Heart rate</b><span class="muted sm">min <b id="sHRmin">--</b> · avg <b id="sHRavg">--</b> · max <b id="sHRmax">--</b></span></header><div class="chart-box"><canvas id="cHR"></canvas></div></article>
+          <article class="chart-card"><header><b style="color: var(--spo2)">SpO₂</b><span class="muted sm">min <b id="sSPmin">--</b> · avg <b id="sSPavg">--</b> · max <b id="sSPmax">--</b></span></header><div class="chart-box"><canvas id="cSP"></canvas></div></article>
+          <article class="chart-card"><header><b style="color: var(--ir)">IR raw</b><span class="muted sm">now <b id="sIR">--</b></span></header><div class="chart-box"><canvas id="cIR"></canvas></div></article>
+          <article class="chart-card"><header><b style="color: var(--red)">RED raw</b><span class="muted sm">now <b id="sRED">--</b></span></header><div class="chart-box"><canvas id="cRED"></canvas></div></article>
+        </div>
+      </section>
+
+      <!-- CONSULT -->
+      <section class="page" id="page-consult" data-title="Consult">
+        <div class="consult">
+          <div class="stage-col">
+            <div class="stage" id="stage" data-state="idle">
+              <video id="remoteVideo" autoplay playsinline></video>
+
+              <div class="stage-panel" id="stageIdle">
+                <img class="stage-av" src="assets/avatars/medicart.svg" alt="">
+                <h3 class="display" id="stageTitle">Checking the cart…</h3>
+                <p id="stageSub">One moment.</p>
+                <button class="btn btn-call btn-lg" id="callBtn" disabled><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>Start video consultation</button>
+              </div>
+
+              <div class="stage-panel" id="stageRinging" hidden>
+                <div class="rings"><img src="assets/avatars/patient.svg" alt=""></div>
+                <h3 class="display">Calling the cart…</h3>
+                <p>MediCart answers automatically in a few seconds.</p>
+                <button class="btn btn-danger" id="cancelBtn">Cancel</button>
+              </div>
+
+              <div class="stage-top" id="stageTop" hidden>
+                <span class="pill crit"><i class="dot live" style="background:currentColor"></i>LIVE</span>
+                <span class="stage-chip mono" id="callTimer">00:00</span>
+                <span class="stage-chip mono" id="netStats">—</span>
+              </div>
+              <div class="stage-reconnect" id="stageReconnect" hidden>Connection unstable — reconnecting…</div>
+
+              <div class="pip" id="pip" hidden><video id="localVideo" autoplay playsinline muted></video><span>You</span></div>
+
+              <div class="controls" id="controls" hidden>
+                <button class="ctl" id="micBtn" aria-label="Mute microphone" title="Microphone"><svg viewBox="0 0 24 24"><path d="M12 1a3 3 0 0 0-3 3v8a3 3 0 0 0 6 0V4a3 3 0 0 0-3-3z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v4M8 23h8"/></svg></button>
+                <button class="ctl" id="camBtn" aria-label="Turn camera off" title="Camera"><svg viewBox="0 0 24 24"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg></button>
+                <button class="ctl" id="spkBtn" aria-label="Mute cart audio" title="Cart audio"><svg viewBox="0 0 24 24"><path d="M11 5L6 9H2v6h4l5 4V5z"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M15.54 8.46a5 5 0 0 1 0 7.07"/></svg></button>
+                <button class="ctl" id="fsBtn" aria-label="Full screen" title="Full screen"><svg viewBox="0 0 24 24"><path d="M8 3H5a2 2 0 0 0-2 2v3M21 8V5a2 2 0 0 0-2-2h-3M3 16v3a2 2 0 0 0 2 2h3M16 21h3a2 2 0 0 0 2-2v-3"/></svg></button>
+                <button class="ctl ctl-end" id="endBtn" aria-label="End call" title="End call"><svg viewBox="0 0 24 24"><path d="M10.68 13.31a16 16 0 0 0 3.41 2.6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6A19.79 19.79 0 0 1 2.12 4.18 2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91"/><path d="M23 1L1 23"/></svg></button>
+              </div>
+              <button class="tap-sound" id="tapSound" hidden>Tap to hear the patient</button>
+            </div>
+            <p class="stage-status" id="callStatus">Not in a call</p>
+          </div>
+
+          <aside class="consult-side">
+            <article class="card side-vitals">
+              <div class="card-head"><h3>Patient vitals</h3><span class="pill" id="cvState">—</span></div>
+              <div class="sv-grid">
+                <div><span class="eyebrow">Heart rate</span><b class="num" style="color: var(--hr)"><span id="cvHR">--</span><small>BPM</small></b></div>
+                <div><span class="eyebrow">SpO₂</span><b class="num" style="color: var(--spo2)"><span id="cvSp">--</span><small>%</small></b></div>
+              </div>
+            </article>
+            <article class="card">
+              <div class="card-head"><h3>Ask the patient</h3><span class="muted sm">Shown on the cart in English &amp; Bangla</span></div>
+              <div class="prompts" id="prompts">
+                <button class="btn btn-sm" data-prompt="finger" disabled>Finger on sensor</button>
+                <button class="btn btn-sm" data-prompt="still" disabled>Stay still</button>
+                <button class="btn btn-sm" data-prompt="closer" disabled>Come closer</button>
+                <button class="btn btn-sm" data-prompt="louder" disabled>Speak louder</button>
+                <button class="btn btn-sm" data-prompt="nurse" disabled>Nurse on the way</button>
+                <button class="btn btn-sm" data-prompt="done" disabled>We are done</button>
+              </div>
+              <form class="prompt-custom" id="promptForm">
+                <input class="input" id="promptText" maxlength="120" placeholder="Custom message…" disabled>
+                <button class="btn btn-sm btn-primary" disabled id="promptSend">Send</button>
+              </form>
+            </article>
+            <article class="card notes">
+              <div class="card-head"><h3>Consultation notes</h3><span class="muted sm" id="notesHint">Saved to Records when the call ends</span></div>
+              <textarea id="notes" rows="7" placeholder="Symptoms, observations, advice…"></textarea>
+            </article>
+          </aside>
+        </div>
+      </section>
+
+      <!-- RECORDS -->
+      <section class="page" id="page-records" data-title="Records">
+        <div class="tabs" role="tablist">
+          <button class="tab on" data-tab="consults" role="tab">Consultations</button>
+          <button class="tab" data-tab="history" role="tab">Sensor history</button>
+        </div>
+
+        <div class="tab-pane" id="tab-consults">
+          <div class="toolbar">
+            <span class="muted sm" id="consultCount">—</span>
+            <div class="grow"></div>
+            <button class="btn btn-sm" id="consultReload">Refresh</button>
+            <button class="btn btn-sm" id="consultCsv">Export CSV</button>
+            <button class="btn btn-sm" id="consultJson">Export JSON</button>
+          </div>
+          <div class="table-card"><div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Started</th><th>Clinician</th><th>Duration</th><th>Outcome</th><th>HR</th><th>SpO₂</th><th>Notes</th></tr></thead>
+              <tbody id="consultBody"><tr><td colspan="7" class="empty">Loading…</td></tr></tbody>
+            </table>
+          </div></div>
+        </div>
+
+        <div class="tab-pane" id="tab-history" hidden>
+          <div class="toolbar">
+            <span class="muted sm" id="histCount">—</span>
+            <div class="grow"></div>
+            <div class="seg" id="histSeg"><button data-n="100" class="on">Latest 100</button><button data-n="500">500</button><button data-n="0">All</button></div>
+            <button class="btn btn-sm" id="histCsv">Export CSV</button>
+            <button class="btn btn-sm" id="histJson">Export JSON</button>
+            <button class="btn btn-sm" id="histClear">Clear history</button>
+          </div>
+          <div class="table-card"><div class="table-wrap">
+            <table class="table">
+              <thead><tr><th>Time</th><th>HR</th><th>SpO₂</th><th>IR</th><th>RED</th><th>Finger</th><th>State</th></tr></thead>
+              <tbody id="histBody"><tr><td colspan="7" class="empty">Open this tab to load.</td></tr></tbody>
+            </table>
+          </div></div>
+        </div>
+      </section>
+
+      <!-- DATA STREAM -->
+      <!-- DRIVE -->
+      <section class="page" id="page-drive" data-title="Drive">
+        <div class="drive-grid">
+          <article class="card drive-mode">
+            <div class="card-head"><h3>Driving mode</h3><span class="pill" id="drvCtlPill">Controller offline</span></div>
+            <div class="mode-row" role="group" aria-label="Driving mode">
+              <button class="mode-btn" id="modeAuto" type="button"><svg viewBox="0 0 24 24"><path d="M4 20c4-1 4-7 8-8s4-7 8-8"/><circle cx="12" cy="12" r="2"/></svg><b>Auto</b><span>Follows the line, stops for people</span></button>
+              <button class="mode-btn" id="modeManual" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 4v5.5M5 16l5-2.5M19 16l-5-2.5"/></svg><b>Manual</b><span>You drive from this page</span></button>
+            </div>
+            <button class="estop" id="estopBtn" type="button"><span class="estop-cap"></span>Emergency stop</button>
+            <p class="drive-note" id="drvModeNote">Waiting for the robot's drive controller…</p>
+          </article>
+
+          <article class="card drive-pad-card">
+            <div class="card-head"><h3>Manual drive</h3><span class="pill" id="drvPadPill">Locked</span></div>
+            <div class="pad-wrap">
+              <div class="pad locked" id="pad" tabindex="0" role="application" aria-label="Drive pad. Press and drag, or hold W A S D or the arrow keys.">
+                <span class="pad-lbl f">Forward</span><span class="pad-lbl b">Back</span><span class="pad-lbl l">Left</span><span class="pad-lbl r">Right</span>
+                <div class="pad-ring"></div>
+                <div class="knob" id="knob"></div>
+              </div>
+              <div class="pad-side">
+                <label class="field" for="spd"><span>Speed limit · <b class="num" id="spdVal">120</b> PWM</span><input type="range" id="spd" min="40" max="200" step="10" value="120"></label>
+                <div class="wheels" aria-label="Wheel speed">
+                  <div class="wheel"><span>Left</span><div class="wbar"><i id="wL"></i></div><b class="num" id="wLv">0</b></div>
+                  <div class="wheel"><span>Right</span><div class="wbar"><i id="wR"></i></div><b class="num" id="wRv">0</b></div>
+                </div>
+                <div class="drive-alert" id="drvAlert" hidden></div>
+                <p class="drive-help">Press and drag inside the circle, or hold <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> / arrow keys. Let go and the cart stops within a second. <kbd>Space</kbd> stops at once.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="card drive-status">
+            <div class="card-head"><h3>Robot</h3><span class="pill" id="drvModePill">—</span></div>
+            <dl class="kv kv-tight">
+              <div><dt>Arduino</dt><dd id="drvArd">—</dd></div>
+              <div><dt>Firmware</dt><dd class="mono" id="drvFw">—</dd></div>
+              <div><dt>Vision (medicart.py)</dt><dd id="drvVision">—</dd></div>
+              <div><dt>Line sensors S1–S5</dt><dd><span class="irbar" id="drvLine"><i></i><i></i><i></i><i></i><i></i></span></dd></div>
+              <div><dt>Driving now</dt><dd id="drvDriver">—</dd></div>
+              <div><dt>Last update</dt><dd id="drvSeen">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card drive-log">
+            <div class="card-head"><h3>Controller log</h3></div>
+            <ol class="drv-events" id="drvEvents"><li class="empty">No events yet.</li></ol>
+          </article>
+        </div>
+      </section>
+
+      <section class="page" id="page-stream" data-title="Data stream">
+        <div class="toolbar">
+          <span class="muted sm" id="rawCount">0 packets</span>
+          <div class="grow"></div>
+          <button class="btn btn-sm" id="rawPause">Pause</button>
+          <button class="btn btn-sm" id="rawClear">Clear</button>
+          <button class="btn btn-sm" id="rawCsv">Export CSV</button>
+        </div>
+        <div class="table-card"><div class="table-wrap tall">
+          <table class="table">
+            <thead><tr><th>Time</th><th>HR</th><th>SpO₂</th><th>IR</th><th>RED</th><th>Finger</th><th>State</th><th>Samples</th></tr></thead>
+            <tbody id="rawBody"></tbody>
+          </table>
+        </div></div>
+
+        <article class="card">
+          <div class="card-head"><h3>Last MQTT message</h3><button class="btn btn-sm" id="copyJson">Copy JSON</button></div>
+          <div class="inspect-meta"><span class="mono sm" id="inspTopic">—</span><span class="muted sm" id="inspTime">—</span></div>
+          <pre class="json" id="inspPayload">Waiting for messages…</pre>
+        </article>
+      </section>
+
+      <!-- SYSTEM -->
+      <section class="page" id="page-system" data-title="System">
+        <div class="sys-grid">
+          <article class="card">
+            <div class="card-head"><h3>Your profile</h3></div>
+            <form class="profile" id="profileForm">
+              <label class="field"><span>Name shown to the patient</span><input id="profileName" maxlength="60" placeholder="e.g. Dr. Rahman"></label>
+              <button class="btn btn-primary btn-sm" type="submit">Save name</button>
+            </form>
+            <dl class="kv kv-tight"><div><dt>Email</dt><dd id="sysEmail">—</dd></div><div><dt>User ID</dt><dd class="mono" id="sysUid">—</dd></div></dl>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Cart screen</h3><span class="pill" id="sysCartPill">—</span></div>
+            <dl class="kv kv-tight">
+              <div><dt>Cart ID</dt><dd class="mono" id="sysCartId">—</dd></div>
+              <div><dt>Last seen</dt><dd id="sysCartSeen">—</dd></div>
+              <div><dt>Camera</dt><dd id="sysCartCam">—</dd></div>
+              <div><dt>Microphone</dt><dd id="sysCartMic">—</dd></div>
+              <div><dt>In call</dt><dd id="sysCartCall">—</dd></div>
+              <div><dt>App version</dt><dd class="mono" id="sysCartVer">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Sensor (ESP32)</h3><span class="pill" id="sysSensorPill">—</span></div>
+            <dl class="kv kv-tight">
+              <div><dt>Device</dt><dd class="mono" id="sysDev">MEDICART-01</dd></div>
+              <div><dt>Firmware</dt><dd class="mono" id="sysFw">—</dd></div>
+              <div><dt>IP address</dt><dd class="mono" id="sysIp">—</dd></div>
+              <div><dt>Wi-Fi</dt><dd id="sysWifi">—</dd></div>
+              <div><dt>MAX30105</dt><dd id="sysMax">—</dd></div>
+              <div><dt>Uptime</dt><dd id="sysUptime">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Live link (MQTT)</h3><span class="pill" id="sysMqttPill">—</span></div>
+            <dl class="kv kv-tight">
+              <div><dt>Broker</dt><dd class="mono wrap" id="sysBroker">—</dd></div>
+              <div><dt>Client ID</dt><dd class="mono" id="sysClient">—</dd></div>
+              <div><dt>Messages</dt><dd class="num" id="sysMsgs">0</dd></div>
+              <div><dt>Rate</dt><dd class="num" id="sysRate">0 /s</dd></div>
+              <div><dt>Reconnects</dt><dd class="num" id="sysRecon">0</dd></div>
+            </dl>
+            <div class="card-actions"><button class="btn btn-sm" id="mqttToggle">Disconnect</button></div>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Firebase</h3><span class="pill ok">Connected</span></div>
+            <dl class="kv kv-tight">
+              <div><dt>Project</dt><dd class="mono" id="sysProject">—</dd></div>
+              <div><dt>Live path</dt><dd class="mono">/medicart/live</dd></div>
+              <div><dt>History</dt><dd class="mono">sensor_history</dd></div>
+              <div><dt>Consultations</dt><dd class="mono">consultations</dd></div>
+              <div><dt>Signalling</dt><dd class="mono" id="sysSignal">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card">
+            <div class="card-head"><h3>Cart hardware</h3></div>
+            <dl class="kv kv-tight">
+              <div><dt>Drive MCU</dt><dd>Arduino Mega 2560</dd></div>
+              <div><dt>Vision</dt><dd>Raspberry Pi · YOLOv8n-pose</dd></div>
+              <div><dt>Motors</dt><dd>BTS7960 × 2</dd></div>
+              <div><dt>Line sensor</dt><dd>5-ch IR (A8–A12)</dd></div>
+              <div><dt>Safety zones</dt><dd>Stop ≤ 1 m · warn ≤ 2 m</dd></div>
+              <div><dt>Stations</dt><dd>ArUco / QR 1–10</dd></div>
+              <div><dt>Vitals</dt><dd>ESP32 + MAX30105 (SDA 25, SCL 26)</dd></div>
+            </dl>
+          </article>
+        </div>
+      </section>
+
+    </div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts" aria-live="polite"></div>
+<!-- Firebase loader. Inline on purpose: browsers refuse module *files* when a page is opened
+     from disk (file://), but an inline module importing from gstatic works everywhere. -->
+<script type="module">
+import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
+import * as A from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
+import * as D from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
+import * as F from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js';
+const app = initializeApp(window.MC_CONFIG.FIREBASE_CONFIG);
+window.MC_FB = {
+  app, auth: A.getAuth(app), rtdb: D.getDatabase(app), db: F.getFirestore(app),
+  onAuthStateChanged: A.onAuthStateChanged, signInWithEmailAndPassword: A.signInWithEmailAndPassword,
+  signOut: A.signOut, sendPasswordResetEmail: A.sendPasswordResetEmail, updateProfile: A.updateProfile,
+  ref: D.ref, set: D.set, update: D.update, get: D.get, push: D.push, remove: D.remove,
+  onValue: D.onValue, onChildAdded: D.onChildAdded, onDisconnect: D.onDisconnect, serverTimestamp: D.serverTimestamp,
+  collection: F.collection, addDoc: F.addDoc, getDocs: F.getDocs, query: F.query, orderBy: F.orderBy,
+  limit: F.limit, writeBatch: F.writeBatch, fsTimestamp: F.serverTimestamp, Timestamp: F.Timestamp,
+};
+window.MC.initServerClock(window.MC_FB);
+window.dispatchEvent(new Event('mc-ready'));
+</script>
+<script>
+// If something above can't load (offline, blocked CDN), say so instead of spinning forever.
+(function () {
+  var shown = false;
+  function fail(why) {
+    var b = document.getElementById('boot');
+    if (shown || !b || b.hidden) return;
+    shown = true;
+    document.getElementById('bootWhy').textContent = why;
+    document.getElementById('bootMsg').hidden = false;
+    b.classList.add('boot-failed');
+  }
+  window.addEventListener('error', function (e) {
+    var t = e.target;
+    if (t && t.tagName === 'SCRIPT' && t.src) fail('Could not load ' + new URL(t.src).hostname + ' — check the internet connection.');
+  }, true);
+  setTimeout(function () {
+    if (!window.MC_CONFIG || !window.MC) fail('The app files did not load. Make sure the js/ folder sits next to this page.');
+    else if (!window.MC_FB) fail('Firebase could not be reached — check the internet connection (www.gstatic.com).');
+    else fail('Firebase is taking too long to respond.');
+  }, 15000);
+})();
+</script>
+</body>
+</html>

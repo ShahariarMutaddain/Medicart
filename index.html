@@ -536,6 +536,66 @@ body::before {
 .profile { display: grid; gap: 10px; margin-bottom: 12px; }
 .profile .btn { justify-self: start; }
 
+
+/* ─── Drive (manual + autonomous control) ─────────────────── */
+.drive-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: 16px; align-items: start; }
+.drive-mode { grid-row: span 1; }
+.drive-pad-card { grid-row: span 2; }
+@media (max-width: 1000px) { .drive-grid { grid-template-columns: 1fr; } .drive-pad-card { grid-row: auto; } }
+.mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.mode-btn { display: grid; justify-items: start; gap: 2px; text-align: left; padding: 12px 14px; border-radius: var(--r-md); border: 1.5px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; font: inherit; transition: border-color .15s, background-color .15s; min-width: 0; }
+.mode-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; color: var(--text-3); margin-bottom: 4px; }
+.mode-btn b { font-size: 15px; }
+.mode-btn span { font-size: 12px; color: var(--text-3); line-height: 1.35; }
+.mode-btn:hover:not(:disabled) { border-color: var(--text-3); }
+.mode-btn.on { border-color: var(--navy-3); background: var(--info-bg); }
+.mode-btn.on svg { color: var(--navy-3); }
+.mode-btn:disabled { opacity: .5; cursor: not-allowed; }
+.estop { margin-top: 12px; width: 100%; display: flex; align-items: center; justify-content: center; gap: 12px; height: 58px; border-radius: 12px; border: 0; cursor: pointer;
+  background: #C41E2A; color: #fff; font: 700 17px/1 var(--ff-body); letter-spacing: .06em; text-transform: uppercase; box-shadow: 0 4px 0 #8E141D; transition: transform .08s, box-shadow .08s; }
+.estop:active { transform: translateY(3px); box-shadow: 0 1px 0 #8E141D; }
+.estop-cap { width: 22px; height: 22px; border-radius: 50%; background: #FFD43B; box-shadow: inset 0 0 0 4px #C41E2A, 0 0 0 2px #FFD43B; }
+.estop.latched { animation: estopPulse 1.2s var(--ease-in-out) infinite; }
+@keyframes estopPulse { 50% { box-shadow: 0 4px 0 #8E141D, 0 0 0 6px color-mix(in srgb, #C41E2A 30%, transparent); } }
+.drive-note { margin: 10px 0 0; font-size: 13px; color: var(--text-2); }
+.pad-wrap { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); gap: 20px; align-items: center; }
+@media (max-width: 640px) { .pad-wrap { grid-template-columns: 1fr; justify-items: center; } .pad-side { width: 100%; } }
+.pad { position: relative; width: 100%; max-width: 300px; aspect-ratio: 1; border-radius: 50%; touch-action: none; user-select: none; -webkit-user-select: none; cursor: grab;
+  background: radial-gradient(circle at 50% 50%, var(--surface) 0 18%, var(--surface-2) 19% 100%); border: 1.5px solid var(--line); box-shadow: inset 0 2px 10px rgba(10, 38, 71, .08); }
+.pad:focus-visible { outline: 3px solid var(--navy-3); outline-offset: 3px; }
+.pad::before, .pad::after { content: ""; position: absolute; background: var(--line); }
+.pad::before { left: 50%; top: 10%; bottom: 10%; width: 1px; }
+.pad::after { top: 50%; left: 10%; right: 10%; height: 1px; }
+.pad-ring { position: absolute; inset: 30%; border-radius: 50%; border: 1px dashed var(--line); }
+.pad-lbl { position: absolute; z-index: 1; padding: 1px 5px; border-radius: 4px; background: var(--surface-2); font-size: 10px; font-weight: 700; letter-spacing: .1em; text-transform: uppercase; color: var(--text-3); }
+.pad-lbl.f { top: 4%; left: 50%; transform: translateX(-50%); } .pad-lbl.b { bottom: 4%; left: 50%; transform: translateX(-50%); }
+.pad-lbl.l { left: 3%; top: 50%; transform: translateY(-50%); } .pad-lbl.r { right: 3%; top: 50%; transform: translateY(-50%); }
+.knob { position: absolute; left: 50%; top: 50%; width: 26%; aspect-ratio: 1; margin: -13% 0 0 -13%; border-radius: 50%; z-index: 1;
+  background: radial-gradient(circle at 35% 30%, var(--navy-3), var(--navy)); box-shadow: 0 6px 16px -4px rgba(10, 38, 71, .5); transition: transform .12s var(--ease); }
+.pad.held { cursor: grabbing; } .pad.held .knob { transition: none; }
+.pad.locked { cursor: not-allowed; } .pad.locked .knob { background: var(--line); box-shadow: none; }
+.pad-side { display: grid; gap: 14px; min-width: 0; }
+.pad-side .field input[type=range] { width: 100%; accent-color: var(--navy-3); }
+.wheels { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.wheel { display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 8px; font-size: 12px; color: var(--text-3); }
+.wheel b { color: var(--text); font-size: 13px; min-width: 3ch; text-align: right; }
+.wbar { position: relative; height: 10px; border-radius: 99px; background: var(--inset); overflow: hidden; }
+.wbar::after { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: var(--text-3); opacity: .5; }
+.wbar i { position: absolute; top: 0; bottom: 0; left: 50%; width: 0; background: var(--ok); border-radius: 99px; transition: width .15s, left .15s; }
+.wbar i.rev { background: var(--warn); }
+.drive-alert { padding: 10px 12px; border-radius: var(--r-md); font-size: 13px; font-weight: 600; background: var(--warn-bg); color: var(--warn); }
+.drive-alert.crit { background: var(--crit-bg); color: var(--crit); }
+.drive-help { margin: 0; font-size: 12.5px; color: var(--text-3); line-height: 1.5; }
+.drive-help kbd { font: 600 11px var(--ff-mono); padding: 1px 5px; border: 1px solid var(--line); border-bottom-width: 2px; border-radius: 4px; background: var(--surface); color: var(--text-2); }
+.irbar { display: inline-flex; gap: 4px; }
+.irbar i { width: 12px; height: 12px; border-radius: 3px; background: var(--inset); border: 1px solid var(--line); }
+.irbar i.on { background: var(--text); border-color: var(--text); }
+.drv-events { list-style: none; margin: 0; padding: 0; display: grid; gap: 0; max-height: 260px; overflow: auto; }
+.drv-events li { display: grid; grid-template-columns: auto 1fr; gap: 10px; padding: 7px 0; border-top: 1px solid var(--line-2); font-size: 13px; }
+.drv-events li:first-child { border-top: 0; }
+.drv-events time { font: 12px var(--ff-mono); color: var(--text-3); }
+.drv-events .empty { display: block; color: var(--text-3); }
+
 </style>
 <script src="https://unpkg.com/mqtt@5.3.5/dist/mqtt.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
@@ -940,6 +1000,8 @@ window.MC = {
       <div class="rail-label">Telemedicine</div>
       <a href="#consult" data-page="consult"><svg viewBox="0 0 24 24"><path d="M23 7l-7 5 7 5V7z"/><rect x="1" y="5" width="15" height="14" rx="2"/></svg>Consult<span class="rail-badge" id="navLive" hidden>LIVE</span></a>
       <a href="#records" data-page="records"><svg viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>Records</a>
+      <div class="rail-label">Robot</div>
+      <a href="#drive" data-page="drive"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/><path d="M12 3v6.5M4.2 16.5l5.6-3.2M19.8 16.5l-5.6-3.2"/></svg>Drive<span class="rail-badge" id="navDrive" hidden>MANUAL</span></a>
       <div class="rail-label">Engineering</div>
       <a href="#stream" data-page="stream"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>Data stream</a>
       <a href="#system" data-page="system"><svg viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="1.5"/><rect x="3" y="14" width="18" height="7" rx="1.5"/><path d="M7 6.5h.01M7 17.5h.01"/></svg>System</a>
@@ -948,6 +1010,7 @@ window.MC = {
       <div class="rs-row"><i class="dot" id="rsCart"></i><span id="rsCartText">Cart offline</span></div>
       <div class="rs-row"><i class="dot" id="rsSensor"></i><span id="rsSensorText">Sensor offline</span></div>
       <div class="rs-row"><i class="dot" id="rsLink"></i><span id="rsLinkText">Live link off</span></div>
+      <div class="rs-row"><i class="dot" id="rsDrive"></i><span id="rsDriveText">Drive controller offline</span></div>
     </div>
   </aside>
   <div class="scrim" id="scrim"></div>
@@ -1185,6 +1248,58 @@ window.MC = {
       </section>
 
       <!-- DATA STREAM -->
+      <!-- DRIVE -->
+      <section class="page" id="page-drive" data-title="Drive">
+        <div class="drive-grid">
+          <article class="card drive-mode">
+            <div class="card-head"><h3>Driving mode</h3><span class="pill" id="drvCtlPill">Controller offline</span></div>
+            <div class="mode-row" role="group" aria-label="Driving mode">
+              <button class="mode-btn" id="modeAuto" type="button"><svg viewBox="0 0 24 24"><path d="M4 20c4-1 4-7 8-8s4-7 8-8"/><circle cx="12" cy="12" r="2"/></svg><b>Auto</b><span>Follows the line, stops for people</span></button>
+              <button class="mode-btn" id="modeManual" type="button"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="8"/><circle cx="12" cy="12" r="2.5"/><path d="M12 4v5.5M5 16l5-2.5M19 16l-5-2.5"/></svg><b>Manual</b><span>You drive from this page</span></button>
+            </div>
+            <button class="estop" id="estopBtn" type="button"><span class="estop-cap"></span>Emergency stop</button>
+            <p class="drive-note" id="drvModeNote">Waiting for the robot's drive controller…</p>
+          </article>
+
+          <article class="card drive-pad-card">
+            <div class="card-head"><h3>Manual drive</h3><span class="pill" id="drvPadPill">Locked</span></div>
+            <div class="pad-wrap">
+              <div class="pad locked" id="pad" tabindex="0" role="application" aria-label="Drive pad. Press and drag, or hold W A S D or the arrow keys.">
+                <span class="pad-lbl f">Forward</span><span class="pad-lbl b">Back</span><span class="pad-lbl l">Left</span><span class="pad-lbl r">Right</span>
+                <div class="pad-ring"></div>
+                <div class="knob" id="knob"></div>
+              </div>
+              <div class="pad-side">
+                <label class="field" for="spd"><span>Speed limit · <b class="num" id="spdVal">120</b> PWM</span><input type="range" id="spd" min="40" max="200" step="10" value="120"></label>
+                <div class="wheels" aria-label="Wheel speed">
+                  <div class="wheel"><span>Left</span><div class="wbar"><i id="wL"></i></div><b class="num" id="wLv">0</b></div>
+                  <div class="wheel"><span>Right</span><div class="wbar"><i id="wR"></i></div><b class="num" id="wRv">0</b></div>
+                </div>
+                <div class="drive-alert" id="drvAlert" hidden></div>
+                <p class="drive-help">Press and drag inside the circle, or hold <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> / arrow keys. Let go and the cart stops within a second. <kbd>Space</kbd> stops at once.</p>
+              </div>
+            </div>
+          </article>
+
+          <article class="card drive-status">
+            <div class="card-head"><h3>Robot</h3><span class="pill" id="drvModePill">—</span></div>
+            <dl class="kv kv-tight">
+              <div><dt>Arduino</dt><dd id="drvArd">—</dd></div>
+              <div><dt>Firmware</dt><dd class="mono" id="drvFw">—</dd></div>
+              <div><dt>Vision (medicart.py)</dt><dd id="drvVision">—</dd></div>
+              <div><dt>Line sensors S1–S5</dt><dd><span class="irbar" id="drvLine"><i></i><i></i><i></i><i></i><i></i></span></dd></div>
+              <div><dt>Driving now</dt><dd id="drvDriver">—</dd></div>
+              <div><dt>Last update</dt><dd id="drvSeen">—</dd></div>
+            </dl>
+          </article>
+
+          <article class="card drive-log">
+            <div class="card-head"><h3>Controller log</h3></div>
+            <ol class="drv-events" id="drvEvents"><li class="empty">No events yet.</li></ol>
+          </article>
+        </div>
+      </section>
+
       <section class="page" id="page-stream" data-title="Data stream">
         <div class="toolbar">
           <span class="muted sm" id="rawCount">0 packets</span>
@@ -1288,7 +1403,7 @@ window.MC = {
 <div class="toasts" id="toasts" aria-live="polite"></div>
 <!-- Firebase loader. Inline on purpose: browsers refuse module *files* when a page is opened
      from disk (file://), but an inline module importing from gstatic works everywhere. -->
-<script>/* ═══ js/console.js (runs after the page markup, like defer) ═══ */
+<script>/* ═══ js/console.js (after the page markup, like defer) ═══ */
 // ════════════════════════════════════════════════════════════════
 //  MediCart Console — clinician side
 //  Auth · live vitals (MQTT) · records (Firestore) · WebRTC caller
@@ -1428,6 +1543,7 @@ function startApp() {
   initRecords();
   initStream();
   initSystem();
+  initDrive();
   startMqtt();
 
   onValue(ref(rtdb, `carts/${CART_ID}`), (snap) => { S.cart = snap.val(); renderLinks(); });
@@ -1437,7 +1553,7 @@ function startApp() {
 }
 
 // ─── Navigation (hash routes) ───────────────────────────────────
-const PAGES = ['overview', 'vitals', 'consult', 'records', 'stream', 'system'];
+const PAGES = ['overview', 'vitals', 'consult', 'records', 'drive', 'stream', 'system'];
 function initNav() {
   const go = () => {
     const id = PAGES.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
@@ -1447,6 +1563,7 @@ function initNav() {
     closeRail();
     if (id === 'records' && !el('tab-history').hidden && !S.history.length) loadHistory();
     if (id === 'vitals') Object.values(charts).forEach((c) => c.resize());
+    if (id !== 'drive') releaseDrive();   // leaving the Drive page always stops manual driving
   };
   window.addEventListener('hashchange', go);
   go();
@@ -1608,6 +1725,7 @@ function tick() {
   mp.className = `pill ${S.mqttOn ? 'ok' : 'crit'}`; mp.textContent = S.mqttOn ? 'Connected' : 'Disconnected';
   renderLinks();
   renderDevice();
+  renderDrive();
   if (S.call?.connectedAt) el('callTimer').textContent = fmtClock((Date.now() - S.call.connectedAt) / 1000);
 }
 
@@ -1635,6 +1753,228 @@ function renderCartSystem() {
   el('sysCartMic').textContent = c?.mic || (c ? 'No microphone' : '—');
   el('sysCartCall').textContent = c?.inCall ? `Yes${c.callDoctor ? ` · ${c.callDoctor}` : ''}` : 'No';
   el('sysCartVer').textContent = c?.version || '—';
+}
+
+// ════════════════════════════════════════════════════════════════
+//  Drive — manual + autonomous control (robot side: medicart-control on the Pi)
+//  carts/<id>/control/request  {mode AUTO|MANUAL|STOP, by, name, id, at}   ← console / SSH
+//  carts/<id>/control/drive    {l, r, seq, by, name, at}  every 150 ms while held
+//  carts/<id>/control/state    written by the Pi once a second
+// ════════════════════════════════════════════════════════════════
+const ctlPath = `carts/${CART_ID}/control`;
+const DRV = { state: null, request: null, held: false, keys: new Set(), x: 0, y: 0, l: 0, r: 0, seq: 0, timer: null, disc: false, speed: 120 };
+const KEYMAP = { KeyW: 'f', ArrowUp: 'f', KeyS: 'b', ArrowDown: 'b', KeyA: 'l', ArrowLeft: 'l', KeyD: 'r', ArrowRight: 'r' };
+
+function myName() { return S.user?.displayName || S.user?.email || 'Console'; }
+function ctlOnline() { const st = DRV.state; return !!(st && st.updatedAt && serverNow() - st.updatedAt < 5000); }
+function canDrive() {
+  const st = DRV.state;
+  return ctlOnline() && st.mode === 'MANUAL' && st.manualCapable && st.arduino === 'online';
+}
+
+function initDrive() {
+  onValue(ref(rtdb, `${ctlPath}/state`), (snap) => { DRV.state = snap.val(); renderDrive(); });
+  onValue(ref(rtdb, `${ctlPath}/request`), (snap) => { DRV.request = snap.val(); renderDrive(); });
+  el('modeAuto').addEventListener('click', () => requestMode('AUTO'));
+  el('modeManual').addEventListener('click', () => requestMode('MANUAL'));
+  el('estopBtn').addEventListener('click', () => requestMode('STOP'));
+
+  try { const v = parseInt(localStorage.getItem('mc-drive-speed') || '', 10); if (v >= 40 && v <= 200) DRV.speed = v; } catch { /* storage blocked */ }
+  const spd = el('spd');
+  spd.value = DRV.speed; el('spdVal').textContent = DRV.speed;
+  spd.addEventListener('input', () => {
+    DRV.speed = +spd.value; el('spdVal').textContent = DRV.speed;
+    try { localStorage.setItem('mc-drive-speed', String(DRV.speed)); } catch { /* ignore */ }
+    if (DRV.held) setTarget(DRV.x, DRV.y);
+  });
+
+  const pad = el('pad');
+  const move = (e) => {
+    const r = pad.getBoundingClientRect();
+    const R = r.width / 2 * 0.74;
+    let dx = (e.clientX - (r.left + r.width / 2)) / R;
+    let dy = (e.clientY - (r.top + r.height / 2)) / R;
+    const m = Math.hypot(dx, dy);
+    if (m > 1) { dx /= m; dy /= m; }
+    setKnob(dx, dy);
+    setTarget(dx, -dy);
+  };
+  pad.addEventListener('pointerdown', (e) => {
+    if (!canDrive()) { toast(driveLockReason(), 'warn'); return; }
+    pad.setPointerCapture(e.pointerId);
+    DRV.held = true; pad.classList.add('held');
+    move(e); startSending();
+  });
+  pad.addEventListener('pointermove', (e) => { if (DRV.held && !DRV.keys.size) move(e); });
+  ['pointerup', 'pointercancel', 'lostpointercapture'].forEach((t) => pad.addEventListener(t, () => { if (!DRV.keys.size) releaseDrive(); }));
+
+  const onDrivePage = () => location.hash === '#drive';
+  window.addEventListener('keydown', (e) => {
+    if (!onDrivePage() || e.target.closest?.('input, textarea, select')) return;
+    if (e.code === 'Space' || e.code === 'Escape') { e.preventDefault(); releaseDrive(); return; }
+    const k = KEYMAP[e.code]; if (!k) return;
+    e.preventDefault();
+    if (!canDrive()) { if (!e.repeat) toast(driveLockReason(), 'warn'); return; }
+    DRV.keys.add(k); keysToTarget();
+  });
+  window.addEventListener('keyup', (e) => {
+    const k = KEYMAP[e.code]; if (!k) return;
+    DRV.keys.delete(k);
+    if (DRV.keys.size) keysToTarget(); else releaseDrive();
+  });
+  window.addEventListener('blur', releaseDrive);
+  document.addEventListener('visibilitychange', () => { if (document.hidden) releaseDrive(); });
+}
+
+function driveLockReason() {
+  const st = DRV.state;
+  if (!ctlOnline()) return 'The robot\'s drive controller is offline.';
+  if (st.mode === 'STOP') return 'Emergency stop is on. Choose Manual to drive.';
+  if (st.mode !== 'MANUAL') return 'Switch to Manual first.';
+  if (!st.manualCapable) return 'Manual driving needs Arduino firmware 2.1.';
+  if (st.arduino !== 'online') return 'The Arduino is not connected.';
+  return 'Driving is not available right now.';
+}
+
+function keysToTarget() {
+  const k = DRV.keys;
+  const x = (k.has('r') ? 1 : 0) - (k.has('l') ? 1 : 0);
+  const y = (k.has('f') ? 1 : 0) - (k.has('b') ? 1 : 0);
+  const m = Math.hypot(x, y) || 1;
+  setKnob(x / m, -y / m);
+  DRV.held = true; el('pad').classList.add('held');
+  setTarget(x, y);
+  startSending();
+}
+
+function setKnob(dx, dy) { el('knob').style.transform = `translate(${dx * 140}%, ${dy * 140}%)`; }
+
+// x: right +, y: forward +  →  differential wheel PWM
+function setTarget(x, y) {
+  DRV.x = x; DRV.y = y;
+  const sp = Math.min(DRV.speed, DRV.state?.maxPwm || 200);
+  let v = y * sp, w;
+  if (Math.abs(y) < 0.2) { v = 0; w = x * sp * 0.75; }    // near the middle line: turn on the spot
+  else w = x * sp * 0.55;
+  const cl = (n) => Math.max(-200, Math.min(200, Math.round(n)));
+  DRV.l = cl(v + w); DRV.r = cl(v - w);
+  renderWheels();
+}
+
+function startSending() {
+  if (DRV.timer) return;
+  if (!DRV.disc) {   // if this browser vanishes mid-drive, Firebase zeroes the command for us
+    DRV.disc = true;
+    onDisconnect(ref(rtdb, `${ctlPath}/drive`)).set({ l: 0, r: 0, seq: 0, by: S.user.uid, name: myName(), at: serverTimestamp() }).catch(() => { DRV.disc = false; });
+  }
+  sendDrive();
+  DRV.timer = setInterval(sendDrive, 150);
+}
+
+function sendDrive() {
+  if (!canDrive()) { releaseDrive(); return; }
+  DRV.seq += 1;
+  set(ref(rtdb, `${ctlPath}/drive`), { l: DRV.l, r: DRV.r, seq: DRV.seq, by: S.user.uid, name: myName(), at: serverTimestamp() }).catch(() => {});
+}
+
+function releaseDrive() {
+  const wasActive = !!DRV.timer || DRV.held;
+  DRV.held = false; DRV.keys.clear();
+  if (DRV.timer) { clearInterval(DRV.timer); DRV.timer = null; }
+  DRV.x = DRV.y = DRV.l = DRV.r = 0;
+  const pad = el('pad'); if (pad) { pad.classList.remove('held'); setKnob(0, 0); }
+  if (wasActive && S.user) {
+    DRV.seq += 1;
+    set(ref(rtdb, `${ctlPath}/drive`), { l: 0, r: 0, seq: DRV.seq, by: S.user.uid, name: myName(), at: serverTimestamp() }).catch(() => {});
+  }
+  renderWheels();
+}
+
+async function requestMode(mode) {
+  if (mode !== 'MANUAL') releaseDrive();
+  try {
+    await set(ref(rtdb, `${ctlPath}/request`), { mode, by: S.user.uid, name: myName(), id: crypto.randomUUID(), at: serverTimestamp() });
+    toast(mode === 'STOP' ? 'Emergency stop sent.' : mode === 'AUTO' ? 'Auto (line following) requested.' : 'Manual driving requested.', mode === 'STOP' ? 'crit' : 'info');
+  } catch (e) {
+    toast(`Could not send: ${e.message}`, 'crit');
+  }
+}
+
+function renderWheels() {
+  const st = DRV.state;
+  const ap = st?.applied || { l: 0, r: 0 };
+  const live = ctlOnline() && st?.mode === 'MANUAL';
+  [['L', live ? ap.l : 0], ['R', live ? ap.r : 0]].forEach(([k, v]) => {
+    const bar = el(`w${k}`); const pct = Math.min(1, Math.abs(v) / 200) * 50;
+    bar.style.width = `${pct}%`; bar.style.left = v >= 0 ? '50%' : `${50 - pct}%`;
+    bar.classList.toggle('rev', v < 0);
+    el(`w${k}v`).textContent = v;
+  });
+}
+
+function renderDrive() {
+  const st = DRV.state;
+  const on = ctlOnline();
+  const mode = on ? st.mode : null;
+  const want = DRV.request?.mode;
+
+  const cp = el('drvCtlPill');
+  cp.className = `pill ${on ? 'ok' : 'crit'}`; cp.textContent = on ? 'Controller online' : 'Controller offline';
+  const mp = el('drvModePill');
+  mp.className = `pill ${mode === 'STOP' ? 'crit' : mode === 'MANUAL' ? 'warn' : mode === 'AUTO' ? 'info' : ''}`;
+  mp.textContent = mode === 'STOP' ? 'EMERGENCY STOP' : mode || '—';
+  el('modeAuto').classList.toggle('on', mode === 'AUTO');
+  el('modeManual').classList.toggle('on', mode === 'MANUAL');
+  el('modeManual').disabled = on && !st.manualCapable;
+  el('estopBtn').classList.toggle('latched', mode === 'STOP');
+
+  let note;
+  if (!on) note = st ? `The drive controller on the Pi stopped reporting ${fmtAgo(serverNow() - (st.updatedAt || 0))} ago. Requests are saved and applied when it reconnects.` : 'Waiting for the robot\'s drive controller (medicart-control on the Pi)…';
+  else if (want && want !== st.mode) note = `Requested ${want}… waiting for the robot.`;
+  else if (st.mode === 'AUTO') note = 'The cart follows the line by itself. medicart.py stops it for people.';
+  else if (st.mode === 'MANUAL') note = st.manualCapable ? `Manual: drive with the pad. Set by ${st.modeBy || '—'}.` : 'Manual needs Arduino firmware 2.1.';
+  else note = `Stopped by ${st.modeBy || '—'}. Choose Auto or Manual to release.`;
+  if (on && !st.manualCapable) note += ' Manual driving needs Arduino firmware 2.1 on the Mega.';
+  el('drvModeNote').textContent = note;
+
+  const drivable = canDrive();
+  const pad = el('pad');
+  pad.classList.toggle('locked', !drivable);
+  const pp = el('drvPadPill');
+  pp.className = `pill ${drivable ? (DRV.held ? 'warn' : 'ok') : ''}`;
+  pp.textContent = drivable ? (DRV.held ? 'Driving' : 'Ready') : 'Locked';
+  if (!drivable && (DRV.held || DRV.timer)) releaseDrive();
+
+  const alert = el('drvAlert');
+  let msg = '', crit = false;
+  if (on && st.mode === 'STOP') { msg = 'Emergency stop is latched. The wheels stay still until you choose Auto or Manual.'; crit = true; }
+  else if (on && st.blocked) { msg = 'Person ahead: forward is blocked. Turn on the spot or reverse.'; crit = true; }
+  else if (on && st.mode === 'MANUAL' && st.vision === 'offline') msg = `Vision (person detection) is offline. Speed is limited to ${st.slowPwm} PWM. Watch the path yourself.`;
+  else if (on && st.mode === 'MANUAL' && st.driver && st.driver !== myName() && (st.applied?.l || st.applied?.r)) msg = `${st.driver} is driving too. The last command wins.`;
+  alert.hidden = !msg; alert.textContent = msg; alert.classList.toggle('crit', crit);
+
+  el('drvArd').textContent = !st ? '—' : st.arduino === 'online' ? `Online${st.arduinoPort ? ` · ${st.arduinoPort.replace('/dev/', '')}` : ''}` : 'Not connected';
+  el('drvFw').textContent = st?.firmware || '—';
+  el('drvVision').textContent = !st ? '—' : { clear: 'Running · path clear', blocked: 'Running · person in stop zone', offline: 'Not running' }[st.vision] || st.vision;
+  const line = (on && st.line) || '';
+  el('drvLine').querySelectorAll('i').forEach((i, n) => i.classList.toggle('on', line[n] === '1'));
+  el('drvLine').title = line ? `${line}${st.lineLost ? ' · line lost' : ''}` : 'No data';
+  el('drvDriver').textContent = on && st.mode === 'MANUAL' ? (st.driver || 'Nobody') : on && st.mode === 'AUTO' ? 'medicart.py (auto)' : '—';
+  el('drvSeen').textContent = st?.updatedAt ? fmtAgo(serverNow() - st.updatedAt) : '—';
+  if (on) el('spd').max = st.maxPwm || 200;
+
+  const evs = (st?.events || []).slice().reverse();
+  el('drvEvents').innerHTML = evs.length
+    ? evs.map((e) => `<li><time>${new Date(e.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</time><span>${escapeHTML(e.text)}</span></li>`).join('')
+    : '<li class="empty">No events yet.</li>';
+
+  // rail + nav badge
+  el('rsDrive').className = `dot ${!on ? 'crit' : mode === 'STOP' ? 'crit' : mode === 'MANUAL' ? 'warn' : 'ok'}${on ? ' live' : ''}`;
+  el('rsDriveText').textContent = !on ? 'Drive controller offline' : mode === 'STOP' ? 'Drive: EMERGENCY STOP' : `Drive: ${mode === 'AUTO' ? 'Auto' : 'Manual'}`;
+  const nb = el('navDrive');
+  nb.hidden = !(on && (mode === 'MANUAL' || mode === 'STOP'));
+  nb.textContent = mode === 'STOP' ? 'STOP' : 'MANUAL';
+  renderWheels();
 }
 
 // ─── Charts ─────────────────────────────────────────────────────

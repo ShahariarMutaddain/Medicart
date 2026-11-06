@@ -46,7 +46,7 @@
 
 // ─── Defaults (overridable from the portal, stored in flash) ────
 // HiveMQ public broker: free, no account, no login. Shared with everyone,
-// so MediCart uses a long random topic prefix (must match web/js/config.js).
+// so MediCart uses a long random topic prefix (must match js/config.js).
 #define DEFAULT_MQTT_HOST "broker.hivemq.com"
 #define DEFAULT_MQTT_PORT 8883
 #define DEFAULT_MQTT_USER ""

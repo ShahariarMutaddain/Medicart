@@ -1,0 +1,159 @@
+#!/usr/bin/env python3
+# ════════════════════════════════════════════════════════════════════════════
+#  medicart-drive — drive MediCart from a keyboard (on the Pi, or over SSH)
+#
+#    ssh pi@medicart.local      then      medicart-drive
+#
+#  Talks to the medicart-control service through /run/medicart/control.sock,
+#  so it works with no internet at all.
+#
+#    2  MANUAL      1  AUTO (line following)      0 / X  EMERGENCY STOP
+#    W / ↑  forward     S / ↓  back     A / ←  left     D / →  right
+#    SPACE  stop now    + / -  speed    Q  quit (wheels stop)
+#
+#  Hold the keys: the cart only moves while a key is held (it stops ~0.7 s after
+#  you let go, and at once if this program or the SSH session ends).
+# ════════════════════════════════════════════════════════════════════════════
+import curses
+import json
+import os
+import socket
+import sys
+import time
+
+SOCK = os.environ.get("CONTROL_SOCKET", "/run/medicart/control.sock")
+HOLD_S = 0.7            # a key counts as "held" this long after its last repeat
+SEND_S = 0.1
+TURN = 0.6              # turn strength relative to speed
+
+
+class Link:
+    def __init__(self, path: str) -> None:
+        self.s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.s.settimeout(2.0)
+        self.s.connect(path)
+        self.f = self.s.makefile("rwb", buffering=0)
+
+    def call(self, **msg) -> dict:
+        self.f.write((json.dumps(msg) + "\n").encode())
+        line = self.f.readline()
+        if not line:
+            raise ConnectionError("control service closed the connection")
+        return json.loads(line.decode())
+
+
+def ui(scr) -> None:
+    curses.curs_set(0)
+    scr.nodelay(True)
+    scr.keypad(True)
+    curses.use_default_colors()
+    for i, c in enumerate((curses.COLOR_GREEN, curses.COLOR_YELLOW, curses.COLOR_RED, curses.COLOR_CYAN), 1):
+        curses.init_pair(i, c, -1)
+    link = Link(SOCK)
+    who = f"{os.environ.get('USER', 'pi')} (terminal)"
+    link.call(op="status", name=who)
+    speed = 110
+    held = {"f": 0.0, "b": 0.0, "l": 0.0, "r": 0.0}
+    note = "Press 2 for MANUAL, then hold W/A/S/D or the arrow keys."
+    last_send = 0.0
+    state: dict = {}
+    n = 0
+    keymap = {
+        ord("w"): "f", ord("W"): "f", curses.KEY_UP: "f",
+        ord("s"): "b", ord("S"): "b", curses.KEY_DOWN: "b",
+        ord("a"): "l", ord("A"): "l", curses.KEY_LEFT: "l",
+        ord("d"): "r", ord("D"): "r", curses.KEY_RIGHT: "r",
+    }
+    while True:
+        now = time.monotonic()
+        while True:
+            k = scr.getch()
+            if k == -1:
+                break
+            if k in keymap:
+                held[keymap[k]] = now
+            elif k == ord(" "):
+                held = dict.fromkeys(held, 0.0)
+            elif k in (ord("+"), ord("=")):
+                speed = min(200, speed + 10)
+            elif k in (ord("-"), ord("_")):
+                speed = max(40, speed - 10)
+            elif k == ord("2"):
+                r = link.call(op="mode", mode="MANUAL", name=who)
+                note = "MANUAL: hold a direction key." if r.get("ok") else f"Refused: {r.get('info')}"
+            elif k == ord("1"):
+                link.call(op="mode", mode="AUTO", name=who)
+                note = "AUTO: medicart.py is driving (line following)."
+            elif k in (ord("0"), ord("x"), ord("X")):
+                link.call(op="mode", mode="STOP", name=who)
+                held = dict.fromkeys(held, 0.0)
+                note = "EMERGENCY STOP latched. Press 1 (AUTO) or 2 (MANUAL) to release."
+            elif k in (ord("q"), ord("Q"), 27):
+                try:
+                    link.call(op="drive", l=0, r=0, name=who)
+                except Exception:  # noqa: BLE001
+                    pass
+                return
+        on = {k: (now - t) < HOLD_S for k, t in held.items()}
+        v = speed * ((1 if on["f"] else 0) - (1 if on["b"] else 0))
+        w = speed * TURN * ((1 if on["r"] else 0) - (1 if on["l"] else 0))
+        if v == 0 and w:
+            w = speed * 0.7               # turning on the spot: a bit stronger
+            w *= (1 if on["r"] else -1)
+        left, right = int(v + w), int(v - w)
+        if now - last_send >= SEND_S:
+            last_send = now
+            if state.get("mode") == "MANUAL":
+                link.call(op="drive", l=left, r=right, name=who)
+            n += 1
+            if n % 3 == 0 or not state:
+                state = link.call(op="status").get("state", {})
+
+        scr.erase()
+        mode = state.get("mode", "?")
+        col = {"AUTO": 4, "MANUAL": 1, "STOP": 3}.get(mode, 0)
+        scr.addstr(0, 0, "MediCart drive", curses.A_BOLD)
+        scr.addstr(0, 16, f"  mode: {mode}  ", curses.color_pair(col) | curses.A_BOLD | curses.A_REVERSE)
+        scr.addstr(2, 0, f"Arduino: {state.get('arduino', '?'):8}  firmware: {state.get('firmware', '?')}")
+        v_state = state.get("vision", "?")
+        scr.addstr(3, 0, f"Vision : {v_state:8}  ", curses.color_pair({'clear': 1, 'blocked': 3, 'offline': 2}.get(v_state, 0)))
+        scr.addstr(3, 20, f"line: {state.get('line', '-----') or '-----'}  lost: {state.get('lineLost')}")
+        ap = state.get("applied", {})
+        scr.addstr(5, 0, f"Speed  : {speed:3d} PWM  (+/-)   wheels now  L {ap.get('l', 0):4d}   R {ap.get('r', 0):4d}")
+        if state.get("blocked"):
+            scr.addstr(6, 0, "Person ahead: forward blocked (turn or reverse)", curses.color_pair(3) | curses.A_BOLD)
+        elif state.get("limited"):
+            scr.addstr(6, 0, "Vision offline: speed limited", curses.color_pair(2))
+        scr.addstr(8, 0, "2 MANUAL   1 AUTO   0/X STOP   W A S D / arrows   SPACE stop   Q quit")
+        scr.addstr(10, 0, note[: max(10, curses.COLS - 1)])
+        y = 12
+        for ev in state.get("events", [])[-5:]:
+            t = time.strftime("%H:%M:%S", time.localtime(ev.get("t", 0) / 1000))
+            if y < curses.LINES - 1:
+                scr.addstr(y, 0, f"{t}  {ev.get('text', '')}"[: max(10, curses.COLS - 1)], curses.A_DIM)
+                y += 1
+        scr.refresh()
+        time.sleep(0.02)
+
+
+def main() -> int:
+    if not os.path.exists(SOCK):
+        print(f"{SOCK} not found. Is the service running?  sudo systemctl status medicart-control", file=sys.stderr)
+        return 1
+    if len(sys.argv) > 1 and sys.argv[1] in ("auto", "manual", "stop", "status"):
+        link = Link(SOCK)
+        if sys.argv[1] == "status":
+            print(json.dumps(link.call(op="status")["state"], indent=2))
+        else:
+            print(link.call(op="mode", mode=sys.argv[1].upper(), name="command line"))
+        return 0
+    try:
+        curses.wrapper(ui)
+    except (ConnectionError, OSError) as exc:
+        print(f"Lost the control service: {exc}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
