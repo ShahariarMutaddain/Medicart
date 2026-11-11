@@ -1,0 +1,156 @@
+cat << 'EOF' > obstacle_avoidance.py
+import cv2
+import sys
+import numpy as np
+
+def main():
+    show_gui = False
+    for arg in sys.argv:
+        if str(arg).lower() == 'test':
+            show_gui = True
+
+    source = 0 + cv2.CAP_V4L2
+    cap = cv2.VideoCapture(source)
+    cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'MJPG'))
+    cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
+
+    if not cap.isOpened():
+        print("[!] Error: Could not open camera channel.")
+        return
+
+    # ──────────────────────────────────────────────────────────
+    # CRITICAL PHYSICAL CALIBRATION PARAMETERS
+    # ──────────────────────────────────────────────────────────
+    H = 10.0                     # Physical camera height from ground (inches)
+    ALPHA_DEG = 20.0             # Downward lens angle inclination (degrees)
+    LANE_WIDTH_INCHES = 12.0     # Half-width of robot lane tracker width
+    
+    # Mathematical constants derived from Fifine 108° Diagonal FOV optics
+    FY = 376.76                  # Vertical focal length in pixels
+    FX = 278.17                  # Horizontal focal length in pixels
+    X_CENTER = 320.0             # 640 horizontal midpoint
+    Y_CENTER = 240.0             # 480 vertical midpoint
+    # ──────────────────────────────────────────────────────────
+
+    print("Mathematical Perspective Radar System Engaged.")
+
+    while True:
+        ret, frame = cap.read()
+        if not ret or frame is None:
+            continue
+
+        h, w, _ = frame.shape
+        alpha_rad = np.radians(ALPHA_DEG)
+
+        # Trigonometric coordinate projector: physical (Z, X) -> screen (x_px, y_px)
+        def project_to_screen(z_inches, x_inches):
+            try:
+                # 1. Compute physical altitude angle relative to horizon tilt axis
+                theta = np.arctan(H / z_inches) - alpha_rad
+                y_pixel = int(Y_CENTER + (FY * np.tan(theta)))
+                
+                # 2. Compute 3D perspective lateral expansion scaling factor
+                x_pixel = int(X_CENTER + (x_inches * FX) / (z_inches * np.cos(theta)))
+                
+                return max(0, min(w - 1, x_pixel)), max(0, min(h - 1, y_pixel))
+            except:
+                return int(X_CENTER), h - 1
+
+        # Project Left and Right structural tracks across real dimensions (1ft, 2ft, 4ft)
+        pt_L_4ft = project_to_screen(48.0, -LANE_WIDTH_INCHES)
+        pt_R_4ft = project_to_screen(48.0, LANE_WIDTH_INCHES)
+        
+        pt_L_2ft = project_to_screen(24.0, -LANE_WIDTH_INCHES)
+        pt_R_2ft = project_to_screen(24.0, LANE_WIDTH_INCHES)
+        
+        pt_L_1ft = project_to_screen(12.0, -LANE_WIDTH_INCHES)
+        pt_R_1ft = project_to_screen(12.0, LANE_WIDTH_INCHES)
+
+        # Baseline exit projection lines extending off screen space
+        pt_L_base = project_to_screen(6.0, -LANE_WIDTH_INCHES)
+        pt_R_base = project_to_screen(6.0, LANE_WIDTH_INCHES)
+
+        # ──────────────────────────────────────────────────────────
+        # RADAR ENGINE (Obstacle Depth Profiling)
+        # ──────────────────────────────────────────────────────────
+        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+        edged = cv2.Canny(blurred, 40, 120)
+        contours, _ = cv2.findContours(edged, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+
+        critical_obstacle = False
+
+        for contour in contours:
+            x, y, box_w, box_h = cv2.boundingRect(contour)
+            if box_w < 35 or box_h < 35: 
+                continue
+
+            base_y = y + box_h
+            base_x = x + (box_w // 2)
+
+            # Proximity check engine: Is the obstacle touching the center ground lane?
+            # Reversing camera matrix vectors back into real distance metrics
+            try:
+                theta_calc = np.arctan((base_y - Y_CENTER) / FY)
+                total_angle = alpha_rad + theta_calc
+                
+                if np.tan(total_angle) > 0.01:
+                    calculated_dist_inches = H / np.tan(total_angle)
+                else:
+                    calculated_dist_inches = 999.0
+
+                # Compute the lateral distance from center using the projected row depth
+                calculated_x_inches = ((base_x - X_CENTER) * calculated_dist_inches * np.cos(theta_calc)) / FX
+
+                # Trigger emergency stop flag if an obstacle breaches the 1-Foot tracking box
+                if 0 < calculated_dist_inches <= 12.0 and abs(calculated_x_inches) <= LANE_WIDTH_INCHES:
+                    critical_obstacle = True
+                    if show_gui:
+                        cv2.rectangle(frame, (x, y), (x + box_w, y + box_h), (0, 0, 255), 2)
+            except:
+                pass
+
+        if critical_obstacle:
+            print("[FLAG] EMERGENCY STOP! Target object breached 1-Foot boundary limit.")
+
+        # ──────────────────────────────────────────────────────────
+        # RENDER PERSPECTIVE HUD MARKS
+        # ──────────────────────────────────────────────────────────
+        if show_gui:
+            # 🟢 1. Safe Zone (4 Feet -> 2 Feet)
+            cv2.line(frame, pt_L_4ft, pt_L_2ft, (0, 255, 0), 4)
+            cv2.line(frame, pt_R_4ft, pt_R_2ft, (0, 255, 0), 4)
+            cv2.line(frame, pt_L_4ft, (pt_L_4ft[0] + 30, pt_L_4ft[1]), (0, 255, 0), 4)
+            cv2.line(frame, pt_R_4ft, (pt_R_4ft[0] - 30, pt_R_4ft[1]), (0, 255, 0), 4)
+
+            # 🟡 2. Caution Zone (2 Feet -> 1 Foot)
+            cv2.line(frame, pt_L_2ft, pt_L_1ft, (0, 255, 255), 4)
+            cv2.line(frame, pt_R_2ft, pt_R_1ft, (0, 255, 255), 4)
+            cv2.line(frame, pt_L_2ft, (pt_L_2ft[0] + 40, pt_L_2ft[1]), (0, 255, 255), 4)
+            cv2.line(frame, pt_R_2ft, (pt_R_2ft[0] - 40, pt_R_2ft[1]), (0, 255, 255), 4)
+
+            # 🔴 3. Danger Zone (1 Foot -> Base Chassis)
+            cv2.line(frame, pt_L_1ft, pt_L_base, (0, 0, 255), 5)
+            cv2.line(frame, pt_R_1ft, pt_R_base, (0, 0, 255), 5)
+            cv2.line(frame, pt_L_1ft, (pt_L_1ft[0] + 50, pt_L_1ft[1]), (0, 0, 255), 5)
+            cv2.line(frame, pt_R_1ft, (pt_R_1ft[0] - 50, pt_R_1ft[1]), (0, 0, 255), 5)
+
+            # Screen Text Status Blocks
+            if critical_obstacle:
+                cv2.rectangle(frame, (15, 15), (280, 55), (0, 0, 255), cv2.FILLED)
+                cv2.putText(frame, "BRAKE WARNING", (30, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 255, 255), 2)
+            else:
+                cv2.rectangle(frame, (15, 15), (200, 55), (0, 255, 0), cv2.FILLED)
+                cv2.putText(frame, "PATH CLEAR", (30, 43), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 0, 0), 2)
+
+            cv2.imshow('WSL2 Webcam Stream', frame)
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
+
+    cap.release()
+    cv2.destroyAllWindows()
+
+if __name__ == "__main__":
+    main()
+EOF
