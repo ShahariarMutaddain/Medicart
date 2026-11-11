@@ -1,0 +1,144 @@
+// Motor Control Pins (Pins 2, 3, 4, 5 handle both PWM speed and direction)
+const int MOTOR_L_PIN1 = 2; // Left Motor Forward / PWM
+const int MOTOR_L_PIN2 = 3; // Left Motor Backward / PWM
+const int MOTOR_R_PIN1 = 4; // Right Motor Forward / PWM
+const int MOTOR_R_PIN2 = 5; // Right Motor Backward / PWM
+
+const int IR_PINS[5] = {A8, A9, A10, A11, A12};  // S1 (leftmost) to S5 (rightmost)
+const int BUZZER_PIN = 25;
+
+// Speed: 15% speed -> PWM 38 out of 255
+const int MOTOR_SPEED = 38; 
+
+// Active slide brake speed: inside wheel spins slightly backward (PWM 15) for ultra-hard cornering on both sides
+const int SLIDE_BRAKE_SPEED = 15; 
+
+// Variables to track current PWM values for Serial printing
+int currentLeftPWM = 0;
+int currentRightPWM = 0;
+
+// Anti-glitch counter for temporary line dropouts
+int offLineCount = 0;
+const int GLITCH_THRESHOLD = 2; // Must stay off-line for 2 cycles before stopping
+
+void setup() {
+  Serial.begin(9600);
+
+  // Configure motor control pins as outputs
+  pinMode(MOTOR_L_PIN1, OUTPUT);
+  pinMode(MOTOR_L_PIN2, OUTPUT);
+  pinMode(MOTOR_R_PIN1, OUTPUT);
+  pinMode(MOTOR_R_PIN2, OUTPUT);
+
+  // Configure IR sensor pins as inputs
+  for (int i = 0; i < 5; i++) {
+    pinMode(IR_PINS[i], INPUT);
+  }
+  
+  pinMode(BUZZER_PIN, OUTPUT);
+}
+
+void setMotorPWM(int leftForward, int leftBackward, int rightForward, int rightBackward) {
+  // Track active speed for Serial display
+  currentLeftPWM = (leftForward > 0) ? leftForward : leftBackward;
+  currentRightPWM = (rightForward > 0) ? rightForward : rightBackward;
+
+  analogWrite(MOTOR_L_PIN1, leftForward);
+  analogWrite(MOTOR_L_PIN2, leftBackward);
+  analogWrite(MOTOR_R_PIN1, rightForward);
+  analogWrite(MOTOR_R_PIN2, rightBackward);
+}
+
+void moveForward() {
+  setMotorPWM(MOTOR_SPEED, 0, MOTOR_SPEED, 0);
+}
+
+void slideLeft() {
+  // Left wheel actively brakes/reverses slightly, right wheel pushes forward
+  setMotorPWM(0, SLIDE_BRAKE_SPEED, MOTOR_SPEED, 0); 
+}
+
+void turnLeft() {
+  setMotorPWM(0, MOTOR_SPEED, MOTOR_SPEED, 0); // Sharp pivot turn left
+}
+
+void slideRight() {
+  // Right wheel actively brakes/reverses slightly, left wheel pushes forward
+  setMotorPWM(MOTOR_SPEED, 0, 0, SLIDE_BRAKE_SPEED); 
+}
+
+void turnRight() {
+  setMotorPWM(MOTOR_SPEED, 0, 0, MOTOR_SPEED); // Sharp pivot turn right
+}
+
+void stopMotors() {
+  setMotorPWM(0, 0, 0, 0);
+}
+
+void loop() {
+  // Inverted readings: '!' flips 0 to 1 and 1 to 0
+  int s1 = !digitalRead(IR_PINS[0]); // Leftmost
+  int s2 = !digitalRead(IR_PINS[1]); // Mid-Left
+  int s3 = !digitalRead(IR_PINS[2]); // Center
+  int s4 = !digitalRead(IR_PINS[3]); // Mid-Right
+  int s5 = !digitalRead(IR_PINS[4]); // Rightmost
+
+  // Check if all sensors see white (off line / potential glitch)
+  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
+    offLineCount++;
+    if (offLineCount >= GLITCH_THRESHOLD) {
+      stopMotors();
+      Serial.println("stop (confirmed off-line)");
+    } else {
+      // Ignore the momentary glitch and maintain forward momentum briefly
+      moveForward();
+      Serial.println("forwrd (glitch ignored)");
+    }
+  }
+  else {
+    // Reset glitch counter as soon as a valid signal is detected
+    offLineCount = 0;
+
+    // State matching logic
+    if (s1 == 0 && s2 == 0 && s3 == 1 && s4 == 0 && s5 == 0) {
+      moveForward();
+      Serial.println("forwrd");
+    }
+    else if (s1 == 0 && s2 == 1 && s3 == 0 && s4 == 0 && s5 == 0) {
+      slideLeft();
+      Serial.println("slide left (active reverse brake)");
+    }
+    else if (s1 == 1 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
+      turnLeft();
+      Serial.println("left (sharp)");
+    }
+    else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 1 && s5 == 0) {
+      slideRight();
+      Serial.println("slide right (active reverse brake)");
+    }
+    else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 1) {
+      turnRight();
+      Serial.println("right (sharp)");
+    }
+    else if (s1 == 1 && s2 == 1 && s3 == 1 && s4 == 1 && s5 == 1) {
+      stopMotors();
+      Serial.println("stop (line junction)");
+    }
+    else {
+      moveForward();
+      Serial.println("forwrd (default)");
+    }
+  }
+
+  // Print sensors, current PWM values, and status to Serial Monitor
+  Serial.print("S1: "); Serial.print(s1);
+  Serial.print("\tS2: "); Serial.print(s2);
+  Serial.print("\tS3: "); Serial.print(s3);
+  Serial.print("\tS4: "); Serial.print(s4);
+  Serial.print("\tS5: "); Serial.print(s5);
+  Serial.print("\t| PWM_L: "); Serial.print(currentLeftPWM);
+  Serial.print("\tPWM_R: "); Serial.print(currentRightPWM);
+  Serial.println();
+
+  delay(50); 
+}

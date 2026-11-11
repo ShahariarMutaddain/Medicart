@@ -22,11 +22,25 @@ import cv2
 import numpy as np
 import serial
 
+# [DASH-3] Rifat's web dashboard + MediCart 3.0 control: one set of rules for the Pi dashboard
+# (http://<pi>:5000), the Vercel console's Drive page (Firebase) and SSH (medicart-drive).
+try:
+    from web_dashboard import WebDashboard
+    from drive_link import DriveLink, parse_arduino_line
+    from firebase_bridge import FirebaseBridge
+    DASHBOARD_AVAILABLE = True
+    DASHBOARD_IMPORT_ERROR = ""
+except ImportError as _dash_exc:   # flask missing: run the old SAFE/STOP heartbeat only
+    DASHBOARD_AVAILABLE = False
+    DASHBOARD_IMPORT_ERROR = str(_dash_exc)
+DASHBOARD_HOST = os.environ.get("DASHBOARD_HOST", "127.0.0.1")
+DASHBOARD_PORT = int(os.environ.get("DASHBOARD_PORT", "5000"))
+START_MODE = os.environ.get("START_MODE", "stopped")   # stopped (Rifat's default) | auto
+
 # [FIX-1/2] The Mega may come back as ttyACM1 after a USB drop, so try both.
 SERIAL_PORT = "/dev/ttyACM0"
 SERIAL_PORT_CANDIDATES = ("/dev/ttyACM0", "/dev/ttyACM1")
-# [CTRL-2.1] When the medicart-control service owns the Arduino, it gives this script its own
-# virtual port (MEDICART_SERIAL_PORT=/run/medicart/vision-tty). Not set = original behaviour.
+# Optional: force the Arduino port, e.g. MEDICART_SERIAL_PORT=/dev/ttyUSB0. Not set = try ttyACM0 / ttyACM1.
 if os.environ.get("MEDICART_SERIAL_PORT"):
     SERIAL_PORT = os.environ["MEDICART_SERIAL_PORT"]
     SERIAL_PORT_CANDIDATES = (SERIAL_PORT,)
@@ -730,6 +744,25 @@ def main():
         else:
             print("[INFO] No desktop display; running with terminal reporting only.", flush=True)
 
+        # [DASH-3] dashboard (Rifat), Firebase bridge (Vercel console), Arduino command link
+        dashboard = None
+        bridge = None
+        if DASHBOARD_AVAILABLE:
+            dashboard = WebDashboard(start_mode=START_MODE)
+            dashboard.start(DASHBOARD_HOST, DASHBOARD_PORT)
+            bridge = FirebaseBridge(dashboard)
+            bridge.start()
+            print(f"[DASHBOARD] start mode: {START_MODE} (choose Auto or Manual on a dashboard to move)", flush=True)
+        else:
+            print(f"[WARN] Dashboard off ({DASHBOARD_IMPORT_ERROR}); install flask in this Python. "
+                  f"Running the old SAFE/STOP heartbeat.", flush=True)
+        link = DriveLink(lambda command: send_command(arduino, command)) if DASHBOARD_AVAILABLE else None
+        arduino_motor = (0, 0)
+        inference_started = 0.0
+        last_inference_ms: Optional[float] = None
+        last_drive_logged: Optional[str] = None
+        last_drive_log_time = 0.0
+
         executor = ThreadPoolExecutor(max_workers=2, thread_name_prefix="medicart-vision")
         inference_future: Optional[Future] = None
         qr_future: Optional[Future] = None
@@ -782,6 +815,7 @@ def main():
                 try:
                     people, next_label = inference_future.result()
                     last_inference_success = now
+                    last_inference_ms = (now - inference_started) * 1000.0   # [DASH-3]
                     # [FIX-4] Log the moment an earlier error clears.
                     if last_inference_error is not None:
                         print(f"[VISION] inference recovered; cleared error: {last_inference_error}", flush=True)
@@ -816,6 +850,7 @@ def main():
                 qr_future = None
 
             if inference_future is None and frame_count % MODEL_UPDATE_INTERVAL == 1:
+                inference_started = now   # [DASH-3]
                 inference_future = executor.submit(
                     detect_people, model, frame.copy(), focal_length,
                     device, track_labels, next_label,
@@ -889,6 +924,14 @@ def main():
                     serial_failed = True
                 else:
                     for line in lines:
+                        if link is not None:                      # [DASH-3] firmware 3.0 telemetry
+                            info, show = parse_arduino_line(line)
+                            if "motor" in info:
+                                arduino_motor = info["motor"]
+                            if info:
+                                dashboard.set_arduino_info(**info)
+                            if not show:
+                                continue
                         print(f"[ARDUINO] {line}", flush=True)
                         if "MediCart ready" in line:
                             boot_messages_seen += 1
@@ -912,6 +955,8 @@ def main():
                     boot_messages_seen = 0
                     rx_buffer.clear()
                     last_qr_sent = None   # [FIX-2] The Mega rebooted and lost its QR pins; allow a re-send.
+                    if link is not None:
+                        link.reset()      # [DASH-3] resend mode + silence the Serial Monitor view
                     if had_connection:
                         print(f"[SERIAL] reconnected, waiting {SERIAL_BOOT_WAIT_SECONDS:.1f}s for Mega boot", flush=True)
                     else:
@@ -935,7 +980,21 @@ def main():
             # ------------------------------------------------------------
             # Heartbeat (SAFE / STOP) - the only commands that refresh the Arduino watchdog
             # ------------------------------------------------------------
-            if serial_connected and heartbeat_due(now, last_heartbeat):
+            # [DASH-3] the dashboard decides: STOP | MODE:AUTO | MODE:MANUAL + DRIVE:l,r
+            if link is not None:
+                drive_cmd, drive_left, drive_right = dashboard.requested_drive(safety_command)
+                if serial_connected:
+                    if link.step(now, drive_cmd, drive_left, drive_right):
+                        last_heartbeat_time = link.last_sent
+                        last_command_sent = drive_cmd
+                        label = drive_cmd if drive_cmd != "MODE:MANUAL" else f"MODE:MANUAL DRIVE:{drive_left},{drive_right}"
+                        if label != last_drive_logged or now - last_drive_log_time >= HEARTBEAT_PRINT_INTERVAL_SECONDS:
+                            print(f"[DRIVE] {label} (safety {safety_command})", flush=True)
+                            last_drive_logged = label
+                            last_drive_log_time = now
+                    else:
+                        serial_failed = True
+            elif serial_connected and heartbeat_due(now, last_heartbeat):
                 if send_command(arduino, safety_command):
                     gap_text = "first" if last_heartbeat_time is None else f"+{now - last_heartbeat_time:.2f}s"
                     last_heartbeat = now
@@ -987,6 +1046,21 @@ def main():
             draw_status(frame, people, nearest, status, fps, focal_length)
             draw_qr_detection(frame, last_qr_boundary, last_qr_type, last_qr_data)
 
+            # [DASH-3] show the frame (with boxes and distances) on the dashboards
+            if dashboard is not None:
+                mode_text = dashboard.control_snapshot()["mode"].upper()
+                cv2.putText(frame, f"MODE {mode_text}", (12, frame.shape[0] - 14),
+                            cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 255), 2, cv2.LINE_AA)
+                dashboard.publish_frame(
+                    frame, status, len(people),
+                    nearest.distance if nearest is not None else None,
+                    fps, serial_state,
+                    camera_fps=fps,
+                    frame_latency_ms=round((time.perf_counter() - frame_time) * 1000.0, 1),
+                    inference_ms=None if last_inference_ms is None else round(last_inference_ms, 1),
+                    motor_left=arduino_motor[0], motor_right=arduino_motor[1],
+                )
+
             # ------------------------------------------------------------
             # Terminal reports
             # ------------------------------------------------------------
@@ -1036,6 +1110,13 @@ def main():
     except KeyboardInterrupt:
         print("[INFO] Vision stopped by user.", flush=True)
     finally:
+        try:                                    # [DASH-3]
+            if bridge is not None:
+                bridge.stop()
+            if dashboard is not None:
+                dashboard.stop()
+        except NameError:
+            pass
         if executor is not None:
             executor.shutdown(wait=True, cancel_futures=True)
         if camera is not None:

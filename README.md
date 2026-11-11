@@ -1,6 +1,6 @@
 # MediCart — IUB Robotics Team
 
-> **New: drive control (Auto / Manual / Emergency stop).** See [`CONTROL_SYSTEM.md`](CONTROL_SYSTEM.md). Hardware setup: [`HARDWARE_SETUP.md`](HARDWARE_SETUP.md).
+> **MediCart 3.1:** setup → [`SETUP_GUIDE.md`](SETUP_GUIDE.md) · driving control (Rifat's dashboard, Vercel Drive page, SSH, Serial Monitor tools) → [`CONTROL_SYSTEM.md`](CONTROL_SYSTEM.md).
 
 Unified system for the MediCart autonomous medical cart:
 

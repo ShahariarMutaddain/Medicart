@@ -1,393 +1,313 @@
 #include <Arduino.h>
+#include <EEPROM.h>   // saves the wheel fixes (FLIPL / FLIPR / SWAP)
 
 // ════════════════════════════════════════════════════════════════════════════
-//  MediCart firmware 2.1  =  Rifat's line-following firmware  +  manual drive
+//  MediCart firmware 3.1  ·  IUB Robotics Team  ·  Arduino Mega 2560  ·  115200 baud
 //
-//  AUTO mode (default at power-on) is Rifat's original behaviour, unchanged:
-//    SAFE / STOP heartbeats from medicart.py, 2 s watchdog, QR:n / RESET_QR.
-//  Everything added for the control system is marked  [CTRL-2.1].
+//  Line following = the LFR code that ran on the robot, unchanged:
+//    same pins, MOTOR_SPEED 38, SLIDE_BRAKE_SPEED 15, inverted IR reading (!digitalRead),
+//    same pattern table, same glitch filter (2 cycles), same 50 ms cycle, same Serial text.
+//  Around it, the MediCart architecture: the Pi decides WHEN the cart may move.
 //
-//  [CTRL-2.1] new serial commands (sent by the Pi's medicart-control service):
-//    MAN:<left>,<right>  wheel PWM -255..255 (+ = forward), clamped to MANUAL_MAX_PWM.
-//                        Enters MANUAL mode. Must repeat at least every
-//                        MANUAL_TIMEOUT_MS (0.5 s) or the wheels stop by themselves.
-//    AUTO                leave MANUAL: motors stop; line following resumes on the next SAFE.
-//    STAT                prints one line:
-//                        STAT mode=AUTO obstacle=1 hbAge=120 man=0,0 manAge=0 line=00100 lost=0
-//    STOP                (original) in MANUAL it also stops the wheels at once.
+//  Pi commands (protocol unchanged from firmware 3.0):
+//    SAFE / MODE:AUTO      path clear -> line following      STOP   stop now (person / emergency)
+//    MODE:MANUAL           manual mode                       DRIVE:<left>,<right>  wheel PWM (max 180)
+//    QR:1..10 / RESET_QR   bed output pins                   No command for 750 ms -> motors stop
+//
+//  Serial Monitor (115200, any line ending):
+//    l or 1      line following WITHOUT the Pi for 60 s (type again to continue)   x  STOP
+//    w a s d     forward / pivot left / back / pivot right, 1 s per press (speed 38)
+//    + / -       key speed            v  live view on/off       i  sensors once
+//    t           finger test: wheels lifted, cover sensors, wheels do what the LFR would do
+//    TESTL / TESTR   spin one wheel    FLIPL / FLIPR  reverse a wheel   SWAP  swap sides
+//    SETTINGS    show everything       FACTORY        clear the wheel fixes
+//    STAT        status line (used by the Pi)          VIEW 0 / VIEW 1
+//  There is NO camera brake during l / w a s d / t. Keep someone next to the robot.
 // ════════════════════════════════════════════════════════════════════════════
 
-// [FIX-2] Optional AVR hardware watchdog. OFF by default.
-#define USE_HW_WATCHDOG 0
-#if USE_HW_WATCHDOG && defined(ARDUINO_ARCH_AVR)
-#include <avr/wdt.h>
-#endif
+// ════════════════════════════════════════════════════════════════════════════
+//  FROM THE LFR CODE THAT RAN ON THE ROBOT (values unchanged)
+// ════════════════════════════════════════════════════════════════════════════
 
-// ==========================================
-// MOTOR PIN DEFINITIONS
-// ==========================================
+// Motor Control Pins (Pins 2, 3, 4, 5 handle both PWM speed and direction)
+const int MOTOR_L_PIN1 = 2; // Left Motor Forward / PWM
+const int MOTOR_L_PIN2 = 3; // Left Motor Backward / PWM
+const int MOTOR_R_PIN1 = 4; // Right Motor Forward / PWM
+const int MOTOR_R_PIN2 = 5; // Right Motor Backward / PWM
 
-// Left Motor - BTS Driver
-const int MOTOR_L_PIN1 = 2;   // Forward PWM
-const int MOTOR_L_PIN2 = 3;   // Reverse PWM
+const int IR_PINS[5] = {A8, A9, A10, A11, A12};  // S1 (leftmost) to S5 (rightmost)
+const int BUZZER_PIN = 25;
 
-// Right Motor - BTS Driver
-const int MOTOR_R_PIN1 = 4;   // Forward PWM
-const int MOTOR_R_PIN2 = 5;   // Reverse PWM
+// Speed: 15% speed -> PWM 38 out of 255
+const int MOTOR_SPEED = 38;
 
-// ==========================================
-// 5-CHANNEL IR SENSOR ARRAY
-// ==========================================
+// Active slide brake speed: inside wheel spins slightly backward (PWM 15) for ultra-hard cornering on both sides
+const int SLIDE_BRAKE_SPEED = 15;
 
-// [0] Far Left   = S1
-// [1] Left       = S2
-// [2] Center     = S3
-// [3] Right      = S4
-// [4] Far Right  = S5
-const int IR_PINS[5] = {A8, A9, A10, A11, A12};
+// Variables to track current PWM values for Serial printing
+int currentLeftPWM = 0;
+int currentRightPWM = 0;
 
-// ==========================================
-// BUZZER AND QR OUTPUT PINS
-// ==========================================
+// Anti-glitch counter for temporary line dropouts
+int offLineCount = 0;
+const int GLITCH_THRESHOLD = 2; // Must stay off-line for 2 cycles before stopping
 
-const int BUZZER_PIN = 24;
+// The original loop ended with delay(50). Here the same 50 ms cycle runs without blocking,
+// so Pi commands (STOP!) are still read instantly.
+const unsigned long LFR_CYCLE_MS = 50;
 
+// ════════════════════════════════════════════════════════════════════════════
+//  MEDICART ARCHITECTURE
+// ════════════════════════════════════════════════════════════════════════════
+
+const long SERIAL_BAUD = 115200;                 // the Pi (medicart.py) talks at 115200
 const int QR_OUTPUT_PINS[10] = {6, 7, 8, 9, 10, 11, 12, 13, 22, 23};
-
 // QR 1 -> pin 6,  QR 2 -> pin 7,  QR 3 -> pin 8,  QR 4 -> pin 9,  QR 5 -> pin 10
 // QR 6 -> pin 11, QR 7 -> pin 12, QR 8 -> pin 13, QR 9 -> pin 22, QR 10 -> pin 23
 
-// ==========================================
-// SETTINGS
-// ==========================================
+const unsigned long COMMAND_TIMEOUT_MS = 750;    // no Pi command for 750 ms -> stop
+const int MAX_MANUAL_SPEED = 180;                // DRIVE:l,r is capped here
 
-// true  = black line on white surface
-// false = white line on black surface
-const bool BLACK_LINE = true;
+const unsigned long VIEW_EVERY_MS = 200;         // live view while NOT line following
+const bool VIEW_ON_AT_BOOT = true;               // the Pi sends "VIEW 0" when it connects
+const unsigned long KEY_HOLD_MS = 1000;          // one w/a/s/d press drives this long
+const int KEY_SPEED_START = MOTOR_SPEED;         // keys use the LFR speed (38)
+const int KEY_SPEED_STEP = 10;
+const unsigned long LFR_TEST_MS = 60000;         // "l" without the Pi: 60 s per press
+const unsigned long FINGER_TEST_MS = 120000;     // "t" finger test: 2 min
 
-// ---- Motor speeds (0-255) used by the line-following table ----
-const int FULL_SPEED          = 180;  // 0 0 1 0 0  perfect center
-const int FORWARD_SPEED       = 150;  // 0 1 1 1 0  wide center, and the "fast" side of every turn
-const int SOFT_INNER_SPEED    = 120;  // inner wheel on a soft turn
-const int MEDIUM_INNER_SPEED  = 60;   // inner wheel on a medium turn
-const int HARD_INNER_SPEED    = 0;    // inner wheel on a hard turn
-const int HARD_OUTER_SPEED    = 180;  // outer wheel on a hard turn
-const int SEARCH_SPEED        = 110;  // pivot speed while searching for a lost line
-
-// ---- Intersection (1 1 1 1 1) ----
-// Stop for INTERSECTION_PAUSE_MS (your "execute preset" goes here), then drive
-// straight across for INTERSECTION_CROSS_MS, then stop until the pattern changes.
-const unsigned long INTERSECTION_PAUSE_MS = 1500;
-const unsigned long INTERSECTION_CROSS_MS = 800;
-
-// ---- Lost line (0 0 0 0 0) ----
-// Pivot toward the side where the line was last seen for up to LOST_SEARCH_MS,
-// then stop. Set LOST_LINE_RECOVERY to false for "just stop immediately".
-const bool LOST_LINE_RECOVERY = true;
-const unsigned long LOST_SEARCH_MS = 1500;
-
-const unsigned long COMMAND_TIMEOUT_MS = 2000;
-const bool DEBUG_IR_SENSORS = false;
-
-// ---- [CTRL-2.1] Manual drive ----
-const int MANUAL_MAX_PWM = 200;                // hard cap for manual wheel PWM
-const unsigned long MANUAL_TIMEOUT_MS = 500;   // no MAN: for this long -> wheels stop
-const int MANUAL_ACCEL_PER_MS = 1;             // speed-up limit: 0 -> 200 PWM in 0.2 s
-const int MANUAL_DECEL_PER_MS = 3;             // slow-down limit when the operator lets go
-const bool MANUAL_MOVE_BEEP = false;           // true = short chirp every second while driving manually
-
-// Debug output for diagnosis. Python prints these as "[ARDUINO] ...".
-const bool DEBUG_SAFETY = true;
-// Prints "DBG sensors=00100" whenever the sensor pattern changes (can be chatty).
-const bool DEBUG_SENSORS = false;
+const bool DEBUG_SAFETY = true;                  // "DBG ..." lines for the Pi log
 const unsigned long DEBUG_MIN_INTERVAL_MS = 50;
-
-// "Line lost" beep pattern: 100 ms ON, 400 ms OFF (safety stop stays a SOLID tone).
-const unsigned long LINE_LOST_BEEP_PERIOD_MS = 500;
+const unsigned long LINE_LOST_BEEP_PERIOD_MS = 500;   // line lost: 100 ms beep every 500 ms
 const unsigned long LINE_LOST_BEEP_ON_MS = 100;
 
-// ==========================================
-// GLOBAL STATE
-// ==========================================
-
-bool obstacleDetected = true;
-
-// [CTRL-2.1] manual-mode state
-bool manualMode = false;
-int manTargetL = 0, manTargetR = 0;      // last MAN: request
-int manCurL = 0, manCurR = 0;            // ramped values actually applied
-unsigned long lastManualMs = 0;
-unsigned long lastRampMs = 0;
+// ---- state ----
+bool obstacleDetected = true;                    // starts stopped until the Pi says SAFE
 bool qrOutputs[10] = {false};
 String serialBuffer = "";
+unsigned long lastCharMs = 0;
 unsigned long lastSafetyHeartbeatMs = 0;
-unsigned long lastIRDebugMs = 0;
+enum ControlMode { AUTO_MODE, MANUAL_MODE };
+ControlMode controlMode = AUTO_MODE;
+int manualLeftSpeed = 0;
+int manualRightSpeed = 0;
+int currentLeftSpeed = 0;                        // signed, for STAT / DBG (+ forward, - backward)
+int currentRightSpeed = 0;
 
-// Set by lineFollowing() when all 5 IR sensors see no line.
-bool lineLost = false;
-unsigned long lastLineLostMs = 0;
+unsigned long lastLfrCycleMs = 0;
+bool lfrDueNow = true;
+bool lineLost = false;                           // confirmed off-line (the LFR stopped)
+bool junction = false;                           // 1 1 1 1 1
+uint8_t currentPattern = 0;                      // bit 4 = S1 ... bit 0 = S5
 
-// ---- Line-following memory ----
-int lastLineSide = 0;                    // -1 = line was last on the left, 0 = center/unknown, +1 = right
-bool intersectionActive = false;         // true while the pattern is 1 1 1 1 1
-unsigned long intersectionStartMs = 0;
-unsigned long lostStartMs = 0;           // when the current lost-line episode began
-uint8_t currentPattern = 0;              // latest sensor pattern, bit 4 = S1 ... bit 0 = S5
+bool viewOn = VIEW_ON_AT_BOOT;
+unsigned long lastViewMs = 0;
+unsigned long keyUntilMs = 0;
+unsigned long lfrTestUntilMs = 0;
+int keySpeed = KEY_SPEED_START;
+bool fingerTest = false;
+unsigned long fingerUntilMs = 0;
+byte fingerBase = 0;
+bool flipA = false, flipB = false, swapSides = false;   // A = pins 2/3, B = pins 4/5
+const byte FIX_MAGIC = 0xB1;                     // new value: settings saved by older firmware are ignored
+const int EE_FIX = 32;
 
-// Debug bookkeeping: what we last printed.
 bool prevObstacleDebug = true;
 bool prevLineLostDebug = false;
-uint8_t prevPatternDebug = 0xFF;
+int prevLeftSpeedDebug = 1000;
+int prevRightSpeedDebug = 1000;
 unsigned long lastDebugPrintMs = 0;
 
-// ==========================================
-// MOTOR CONTROL
-// ==========================================
-
-void leftMotor(int speed)
+bool timeBefore(unsigned long until)             // true while millis() < until (rollover-safe)
 {
-    if (speed > 0)
-    {
-        analogWrite(MOTOR_L_PIN1, speed);
-        analogWrite(MOTOR_L_PIN2, 0);
-    }
-    else if (speed < 0)
-    {
-        analogWrite(MOTOR_L_PIN1, 0);
-        analogWrite(MOTOR_L_PIN2, -speed);
-    }
-    else
-    {
-        analogWrite(MOTOR_L_PIN1, 0);
-        analogWrite(MOTOR_L_PIN2, 0);
-    }
+    return until != 0 && (long)(millis() - until) < 0;
+}
+bool localHold()                                 // a Serial Monitor test is driving: no Pi timeout
+{
+    return timeBefore(keyUntilMs) || timeBefore(lfrTestUntilMs) || fingerTest;
 }
 
-void rightMotor(int speed)
-{
-    if (speed > 0)
-    {
-        analogWrite(MOTOR_R_PIN1, speed);
-        analogWrite(MOTOR_R_PIN2, 0);
-    }
-    else if (speed < 0)
-    {
-        analogWrite(MOTOR_R_PIN1, 0);
-        analogWrite(MOTOR_R_PIN2, -speed);
-    }
-    else
-    {
-        analogWrite(MOTOR_R_PIN1, 0);
-        analogWrite(MOTOR_R_PIN2, 0);
-    }
+// ════════════════════════════════════════════════════════════════════════════
+//  MOTORS (the original functions)
+// ════════════════════════════════════════════════════════════════════════════
+
+void setMotorPWM(int leftForward, int leftBackward, int rightForward, int rightBackward) {
+  // Track active speed for Serial display
+  currentLeftPWM = (leftForward > 0) ? leftForward : leftBackward;
+  currentRightPWM = (rightForward > 0) ? rightForward : rightBackward;
+  currentLeftSpeed = leftForward - leftBackward;
+  currentRightSpeed = rightForward - rightBackward;
+
+  // Wheel fixes (FLIPL / FLIPR / SWAP). All OFF by default = exactly the original wiring.
+  int lf = leftForward, lb = leftBackward, rf = rightForward, rb = rightBackward, t;
+  if (swapSides) { t = lf; lf = rf; rf = t; t = lb; lb = rb; rb = t; }
+  if (flipA) { t = lf; lf = lb; lb = t; }
+  if (flipB) { t = rf; rf = rb; rb = t; }
+
+  analogWrite(MOTOR_L_PIN1, lf);
+  analogWrite(MOTOR_L_PIN2, lb);
+  analogWrite(MOTOR_R_PIN1, rf);
+  analogWrite(MOTOR_R_PIN2, rb);
 }
 
-void drive(int leftSpeed, int rightSpeed)
-{
-    leftMotor(leftSpeed);
-    rightMotor(rightSpeed);
+void moveForward() {
+  setMotorPWM(MOTOR_SPEED, 0, MOTOR_SPEED, 0);
 }
 
-void stopMotors()
-{
-    leftMotor(0);
-    rightMotor(0);
+void slideLeft() {
+  // Left wheel actively brakes/reverses slightly, right wheel pushes forward
+  setMotorPWM(0, SLIDE_BRAKE_SPEED, MOTOR_SPEED, 0);
 }
 
-// ---- Steering helpers (turning LEFT = slow down the LEFT wheel) ----
+void turnLeft() {
+  setMotorPWM(0, MOTOR_SPEED, MOTOR_SPEED, 0); // Sharp pivot turn left
+}
 
-void forwardFull()   { drive(FULL_SPEED, FULL_SPEED); }
-void forwardNormal() { drive(FORWARD_SPEED, FORWARD_SPEED); }
+void slideRight() {
+  // Right wheel actively brakes/reverses slightly, left wheel pushes forward
+  setMotorPWM(MOTOR_SPEED, 0, 0, SLIDE_BRAKE_SPEED);
+}
 
-void turnLeftSoft()   { drive(SOFT_INNER_SPEED,   FORWARD_SPEED); }
-void turnLeftMedium() { drive(MEDIUM_INNER_SPEED, FORWARD_SPEED); }
-void turnLeftHard()   { drive(HARD_INNER_SPEED,   HARD_OUTER_SPEED); }
+void turnRight() {
+  setMotorPWM(MOTOR_SPEED, 0, 0, MOTOR_SPEED); // Sharp pivot turn right
+}
 
-void turnRightSoft()   { drive(FORWARD_SPEED, SOFT_INNER_SPEED); }
-void turnRightMedium() { drive(FORWARD_SPEED, MEDIUM_INNER_SPEED); }
-void turnRightHard()   { drive(HARD_OUTER_SPEED, HARD_INNER_SPEED); }
+void stopMotors() {
+  setMotorPWM(0, 0, 0, 0);
+}
 
-void pivotLeft(int speed)  { drive(-speed, speed); }   // spin in place, counter-clockwise
-void pivotRight(int speed) { drive(speed, -speed); }   // spin in place, clockwise
-
-// ==========================================
-// READ SENSOR
-// ==========================================
-
-// true = this sensor sees the line (the "1" in your table)
-bool sensorActive(int index)
+// Signed wheel speeds (manual driving from the Pi, w a s d). + forward, - backward.
+void drive(int left, int right)
 {
-    int value = digitalRead(IR_PINS[index]);
+    setMotorPWM(left > 0 ? left : 0, left < 0 ? -left : 0, right > 0 ? right : 0, right < 0 ? -right : 0);
+}
 
-    if (BLACK_LINE)
-    {
-        return value == LOW;
+// ════════════════════════════════════════════════════════════════════════════
+//  LINE FOLLOWING (the original loop body, one 50 ms cycle)
+// ════════════════════════════════════════════════════════════════════════════
+
+void readLine(int &s1, int &s2, int &s3, int &s4, int &s5)
+{
+  // Inverted readings: '!' flips 0 to 1 and 1 to 0
+  s1 = !digitalRead(IR_PINS[0]); // Leftmost
+  s2 = !digitalRead(IR_PINS[1]); // Mid-Left
+  s3 = !digitalRead(IR_PINS[2]); // Center
+  s4 = !digitalRead(IR_PINS[3]); // Mid-Right
+  s5 = !digitalRead(IR_PINS[4]); // Rightmost
+}
+
+void printSensorLine(int s1, int s2, int s3, int s4, int s5)
+{
+  // Print sensors, current PWM values, and status to Serial Monitor
+  Serial.print("S1: "); Serial.print(s1);
+  Serial.print("\tS2: "); Serial.print(s2);
+  Serial.print("\tS3: "); Serial.print(s3);
+  Serial.print("\tS4: "); Serial.print(s4);
+  Serial.print("\tS5: "); Serial.print(s5);
+  Serial.print("\t| PWM_L: "); Serial.print(currentLeftPWM);
+  Serial.print("\tPWM_R: "); Serial.print(currentRightPWM);
+  Serial.println();
+}
+
+// The original decision table. Drives the wheels and returns the original Serial text.
+const char *lfrDecide(int s1, int s2, int s3, int s4, int s5)
+{
+  currentPattern = (uint8_t)((s1 << 4) | (s2 << 3) | (s3 << 2) | (s4 << 1) | s5);
+  junction = false;
+  lineLost = false;
+
+  // Check if all sensors see white (off line / potential glitch)
+  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
+    offLineCount++;
+    if (offLineCount >= GLITCH_THRESHOLD) {
+      stopMotors();
+      lineLost = true;
+      return "stop (confirmed off-line)";
+    } else {
+      // Ignore the momentary glitch and maintain forward momentum briefly
+      moveForward();
+      return "forwrd (glitch ignored)";
     }
-    else
-    {
-        return value == HIGH;
-    }
+  }
+
+  // Reset glitch counter as soon as a valid signal is detected
+  offLineCount = 0;
+
+  // State matching logic
+  if (s1 == 0 && s2 == 0 && s3 == 1 && s4 == 0 && s5 == 0) {
+    moveForward();
+    return "forwrd";
+  }
+  else if (s1 == 0 && s2 == 1 && s3 == 0 && s4 == 0 && s5 == 0) {
+    slideLeft();
+    return "slide left (active reverse brake)";
+  }
+  else if (s1 == 1 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
+    turnLeft();
+    return "left (sharp)";
+  }
+  else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 1 && s5 == 0) {
+    slideRight();
+    return "slide right (active reverse brake)";
+  }
+  else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 1) {
+    turnRight();
+    return "right (sharp)";
+  }
+  else if (s1 == 1 && s2 == 1 && s3 == 1 && s4 == 1 && s5 == 1) {
+    stopMotors();
+    junction = true;
+    return "stop (line junction)";
+  }
+  else {
+    moveForward();
+    return "forwrd (default)";
+  }
 }
 
-void readIRSensors(bool &s0, bool &s1, bool &s2, bool &s3, bool &s4)
-{
-    s0 = sensorActive(0);
-    s1 = sensorActive(1);
-    s2 = sensorActive(2);
-    s3 = sensorActive(3);
-    s4 = sensorActive(4);
-}
-
-// ==========================================
-// LINE FOLLOWING
-// ==========================================
-
-// Clears the timers/flags so a resume after a safety stop starts fresh.
 void resetLineState()
 {
+    offLineCount = 0;
     lineLost = false;
-    intersectionActive = false;
+    junction = false;
+    lfrDueNow = true;                    // the next line-following cycle runs at once
 }
 
-// Used ONLY for patterns that are not in your table (for example 1 1 1 0 0 or
-// 0 1 1 0 0). It works out where the line is on average:
-//   S1..S5 count as positions -2, -1, 0, +1, +2
-// and then picks the closest of your table's actions.
-void steerByPosition(bool s0, bool s1, bool s2, bool s3, bool s4)
-{
-    int count = (int)s0 + (int)s1 + (int)s2 + (int)s3 + (int)s4;
-    float position = (-2.0f * s0 - 1.0f * s1 + 1.0f * s3 + 2.0f * s4) / (float)count;
-
-    if (position <= -1.75f)      { turnLeftHard();    lastLineSide = -1; }
-    else if (position <= -1.25f) { turnLeftMedium();  lastLineSide = -1; }
-    else if (position <= -0.5f)  { turnLeftSoft();    lastLineSide = -1; }
-    else if (position < 0.5f)    { forwardNormal();   lastLineSide = 0;  }
-    else if (position < 1.25f)   { turnRightSoft();   lastLineSide = 1;  }
-    else if (position < 1.75f)   { turnRightMedium(); lastLineSide = 1;  }
-    else                         { turnRightHard();   lastLineSide = 1;  }
-}
-
+// One cycle every 50 ms, exactly like the original loop (but without blocking).
 void lineFollowing()
 {
-    if (obstacleDetected)
-    {
-        stopMotors();
-        return;
-    }
-
-    bool s0, s1, s2, s3, s4;
-    readIRSensors(s0, s1, s2, s3, s4);
-
-    if (DEBUG_IR_SENSORS && millis() - lastIRDebugMs >= 1000)
-    {
-        Serial.print(s0);
-        Serial.print(s1);
-        Serial.print(s2);
-        Serial.print(s3);
-        Serial.println(s4);
-        lastIRDebugMs = millis();
-    }
-
     unsigned long now = millis();
-    bool wasLost = lineLost;   // remember last pass, then assume "line found" until proven otherwise
-    lineLost = false;
-
-    // Pack the 5 sensors into one number so it reads like your table:
-    // pattern 0b01000 means S1=0 S2=1 S3=0 S4=0 S5=0
-    currentPattern = (uint8_t)((s0 << 4) | (s1 << 3) | (s2 << 2) | (s3 << 1) | (s4 << 0));
-
-    // ---- 1 1 1 1 1 : Intersection / Stop / Execute Preset ----
-    if (currentPattern == 0b11111)
+    if (!lfrDueNow && now - lastLfrCycleMs < LFR_CYCLE_MS)
     {
-        if (!intersectionActive)
-        {
-            intersectionActive = true;
-            intersectionStartMs = now;
-        }
-        unsigned long elapsed = now - intersectionStartMs;
-        if (elapsed < INTERSECTION_PAUSE_MS)
-        {
-            stopMotors();           // pause here; put your preset action in this spot
-        }
-        else if (elapsed < INTERSECTION_PAUSE_MS + INTERSECTION_CROSS_MS)
-        {
-            forwardNormal();        // drive straight across the crossing
-        }
-        else
-        {
-            stopMotors();           // still all-black: stop instead of driving blindly
-        }
-        return;
+        return;                          // between cycles the wheels keep the last command
     }
-    intersectionActive = false;
+    lfrDueNow = false;
+    lastLfrCycleMs = now;
 
-    // ---- 0 0 0 0 0 : Lost line -> recovery using memory of last position ----
-    if (currentPattern == 0b00000)
+    int s1, s2, s3, s4, s5;
+    readLine(s1, s2, s3, s4, s5);
+    const char *what = lfrDecide(s1, s2, s3, s4, s5);
+    if (viewOn)                          // same Serial output as the original code
     {
-        lineLost = true;            // drives the beep + "DBG lineLost" output
-        lastLineLostMs = now;
-        if (!wasLost)
-        {
-            lostStartMs = now;      // a new lost-line episode just began
-        }
-
-        if (LOST_LINE_RECOVERY && lastLineSide != 0 && (now - lostStartMs) < LOST_SEARCH_MS)
-        {
-            if (lastLineSide < 0)
-            {
-                pivotLeft(SEARCH_SPEED);    // line was last on the left: search left
-            }
-            else
-            {
-                pivotRight(SEARCH_SPEED);   // line was last on the right: search right
-            }
-        }
-        else
-        {
-            stopMotors();
-        }
-        return;
-    }
-
-    // ---- The rest of your table ----
-    switch (currentPattern)
-    {
-        case 0b00100: forwardFull();   lastLineSide = 0;  break;   // Perfect center
-        case 0b01110: forwardNormal(); lastLineSide = 0;  break;   // Center (wide)
-
-        case 0b01000: turnLeftSoft();    lastLineSide = -1; break; // Slight left
-        case 0b11000: turnLeftMedium();  lastLineSide = -1; break; // Medium left
-        case 0b10000: turnLeftHard();    lastLineSide = -1; break; // Sharp left
-
-        case 0b00010: turnRightSoft();   lastLineSide = 1;  break; // Slight right
-        case 0b00011: turnRightMedium(); lastLineSide = 1;  break; // Medium right
-        case 0b00001: turnRightHard();   lastLineSide = 1;  break; // Sharp right
-
-        default:
-            // A pattern your table doesn't list: steer by where the line is on average.
-            steerByPosition(s0, s1, s2, s3, s4);
-            break;
+        Serial.println(what);
+        printSensorLine(s1, s2, s3, s4, s5);
     }
 }
 
-// ==========================================
-// BUZZER AND QR OUTPUT CONTROL
-// ==========================================
+// ════════════════════════════════════════════════════════════════════════════
+//  BUZZER, DEBUG, QR
+// ════════════════════════════════════════════════════════════════════════════
 
 void buzzerControl()
 {
-    unsigned long now = millis();
-    bool timedOut = (now - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS;
+    bool timedOut = (millis() - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS && !localHold();
     if (timedOut)
     {
         obstacleDetected = true;
     }
-    // Safety stop or watchdog timeout: SOLID buzzer.
-    bool buzzerOn = obstacleDetected || timedOut;
-    digitalWrite(BUZZER_PIN, buzzerOn ? HIGH : LOW);
+    digitalWrite(BUZZER_PIN, (obstacleDetected || timedOut) ? HIGH : LOW);   // safety stop: solid tone
 }
 
-// Line lost (and NOT a safety stop): short beep, 100 ms on / 400 ms off.
 void lineLostBeep()
 {
     if (lineLost && !obstacleDetected)
@@ -397,24 +317,14 @@ void lineLostBeep()
     }
 }
 
-// Print only when something changed, and never faster than DEBUG_MIN_INTERVAL_MS.
 void debugReport()
 {
-    if (!DEBUG_SAFETY)
-    {
-        return;
-    }
-
+    if (!DEBUG_SAFETY) return;
     unsigned long now = millis();
-    if (now - lastDebugPrintMs < DEBUG_MIN_INTERVAL_MS)
-    {
-        return;
-    }
+    if (now - lastDebugPrintMs < DEBUG_MIN_INTERVAL_MS) return;
 
     if (obstacleDetected != prevObstacleDebug)
     {
-        // hbAge < 2000  -> an explicit STOP/SAFE command caused it
-        // hbAge >= 2000 -> the 2 s watchdog timed out (no heartbeats arriving)
         Serial.print("DBG obstacle=");
         Serial.print((int)obstacleDetected);
         Serial.print(" hbAge=");
@@ -429,15 +339,14 @@ void debugReport()
         prevLineLostDebug = lineLost;
         lastDebugPrintMs = now;
     }
-    else if (DEBUG_SENSORS && currentPattern != prevPatternDebug)
+    else if (currentLeftSpeed != prevLeftSpeedDebug || currentRightSpeed != prevRightSpeedDebug)
     {
-        Serial.print("DBG sensors=");
-        for (int bit = 4; bit >= 0; bit--)
-        {
-            Serial.print((currentPattern >> bit) & 1);
-        }
-        Serial.println();
-        prevPatternDebug = currentPattern;
+        Serial.print("DBG motor=");
+        Serial.print(currentLeftSpeed);
+        Serial.print(',');
+        Serial.println(currentRightSpeed);
+        prevLeftSpeedDebug = currentLeftSpeed;
+        prevRightSpeedDebug = currentRightSpeed;
         lastDebugPrintMs = now;
     }
 }
@@ -458,270 +367,446 @@ void resetQROutputs()
     }
 }
 
-// ==========================================
-// [CTRL-2.1] MANUAL DRIVE
-// ==========================================
+// ════════════════════════════════════════════════════════════════════════════
+//  SERIAL MONITOR TOOLS
+// ════════════════════════════════════════════════════════════════════════════
 
-void manualHalt()
+void saveFixes()
 {
-    manTargetL = manTargetR = 0;
-    manCurL = manCurR = 0;
-    stopMotors();
+    EEPROM.update(EE_FIX, FIX_MAGIC);
+    EEPROM.update(EE_FIX + 1, (byte)((flipA ? 1 : 0) | (flipB ? 2 : 0) | (swapSides ? 4 : 0)));
 }
 
-void enterManual()
+void loadFixes()
 {
-    if (!manualMode)
+    if (EEPROM.read(EE_FIX) == FIX_MAGIC)
     {
-        manualMode = true;
-        manualHalt();
-        resetLineState();
-        lastRampMs = millis();
-        digitalWrite(BUZZER_PIN, LOW);
-        Serial.println("DBG mode=MANUAL");
+        byte f = EEPROM.read(EE_FIX + 1);
+        flipA = f & 1; flipB = f & 2; swapSides = f & 4;
     }
 }
 
-void leaveManual()
+const char *modeName()
 {
-    if (manualMode)
-    {
-        Serial.println("DBG mode=AUTO");
-    }
-    manualMode = false;
-    manualHalt();
-    obstacleDetected = true;      // wait for a fresh SAFE from medicart.py before moving
-    resetLineState();
+    if (fingerTest) return "FINGER-TEST";
+    if (timeBefore(lfrTestUntilMs)) return "LFR-TEST";
+    if (timeBefore(keyUntilMs)) return "KEYS";
+    if (controlMode == MANUAL_MODE) return "MANUAL";
+    return "AUTO";
 }
 
-int rampToward(int current, int target, unsigned long dt)
+void printPattern()
 {
-    // speeding up (|target| > |current| in the same direction) is slower than slowing down
-    bool speedingUp = (target > 0 && target > current && current >= 0) ||
-                      (target < 0 && target < current && current <= 0);
-    long step = (long)dt * (speedingUp ? MANUAL_ACCEL_PER_MS : MANUAL_DECEL_PER_MS);
-    if (step < 1) step = 1;
-    if (target > current) return (int)min((long)target, (long)current + step);
-    if (target < current) return (int)max((long)target, (long)current - step);
-    return current;
+    int s1, s2, s3, s4, s5;
+    readLine(s1, s2, s3, s4, s5);
+    Serial.print(s1); Serial.print(s2); Serial.print(s3); Serial.print(s4); Serial.print(s5);
 }
 
-void manualDrive()
+// Live view while the line follower is NOT running (it prints its own lines when it runs)
+void printView()
 {
-    unsigned long now = millis();
-    unsigned long dt = now - lastRampMs;
-    if (dt == 0)
-    {
-        return;
-    }
-    lastRampMs = now;
-
-    if (now - lastManualMs >= MANUAL_TIMEOUT_MS)
-    {
-        manualHalt();             // operator link silent: stop at once, no ramp
-    }
-    else
-    {
-        manCurL = rampToward(manCurL, manTargetL, dt);
-        manCurR = rampToward(manCurR, manTargetR, dt);
-        drive(manCurL, manCurR);
-    }
-
-    bool moving = (manCurL != 0 || manCurR != 0);
-    bool chirp = MANUAL_MOVE_BEEP && moving && (now % 1000UL) < 60;
-    digitalWrite(BUZZER_PIN, chirp ? HIGH : LOW);
+    int s1, s2, s3, s4, s5;
+    readLine(s1, s2, s3, s4, s5);
+    unsigned long hb = millis() - lastSafetyHeartbeatMs;
+    Serial.print("VIEW ");
+    Serial.print(modeName());
+    Serial.print(obstacleDetected ? " STOPPED" : " GO");
+    Serial.print(" hb ");
+    Serial.print(hb > 99999UL ? 99999UL : hb);
+    Serial.print("ms\t");
+    printSensorLine(s1, s2, s3, s4, s5);
 }
 
-void printStatus()
+void printStat()
 {
-    unsigned long now = millis();
-    bool s0, s1, s2, s3, s4;
-    readIRSensors(s0, s1, s2, s3, s4);
     Serial.print("STAT mode=");
-    Serial.print(manualMode ? "MANUAL" : "AUTO");
+    Serial.print(controlMode == MANUAL_MODE ? "MANUAL" : "AUTO");
     Serial.print(" obstacle=");
     Serial.print((int)obstacleDetected);
     Serial.print(" hbAge=");
-    Serial.print(now - lastSafetyHeartbeatMs);
-    Serial.print(" man=");
-    Serial.print(manCurL);
-    Serial.print(",");
-    Serial.print(manCurR);
-    Serial.print(" manAge=");
-    Serial.print(manualMode ? (now - lastManualMs) : 0UL);
+    Serial.print(millis() - lastSafetyHeartbeatMs);
+    Serial.print(" motor=");
+    Serial.print(currentLeftSpeed);
+    Serial.print(',');
+    Serial.print(currentRightSpeed);
     Serial.print(" line=");
-    Serial.print((int)s0); Serial.print((int)s1); Serial.print((int)s2); Serial.print((int)s3); Serial.print((int)s4);
+    printPattern();
     Serial.print(" lost=");
-    Serial.println((int)lineLost);
+    Serial.print((int)lineLost);
+    Serial.println(" fw=3.1");
 }
 
-// ==========================================
-// SERIAL COMMAND PARSING
-// ==========================================
+void printSettings()
+{
+    Serial.print("SETTINGS LFR speed ");
+    Serial.print(MOTOR_SPEED);
+    Serial.print(", slide brake ");
+    Serial.print(SLIDE_BRAKE_SPEED);
+    Serial.print(", glitch ");
+    Serial.print(GLITCH_THRESHOLD);
+    Serial.print(" cycles of ");
+    Serial.print(LFR_CYCLE_MS);
+    Serial.print(" ms | left wheel=pins ");
+    Serial.print(swapSides ? "4/5" : "2/3");
+    Serial.print((swapSides ? flipB : flipA) ? " reversed" : " normal");
+    Serial.print(", right wheel=pins ");
+    Serial.print(swapSides ? "2/3" : "4/5");
+    Serial.print((swapSides ? flipA : flipB) ? " reversed" : " normal");
+    Serial.print(" | key speed ");
+    Serial.println(keySpeed);
+}
+
+void printHelp()
+{
+    Serial.println("== MediCart 3.1 Serial Monitor ==");
+    Serial.println(" l/1 line following 60 s (no Pi)   x STOP   w a s d drive 1 s   + - key speed");
+    Serial.println(" v live view on/off   i sensors once   t finger test (wheels lifted)");
+    Serial.println(" TESTL TESTR FLIPL FLIPR SWAP   SETTINGS   FACTORY   STAT   h help");
+    Serial.println(" (no camera brake during l / keys / t - keep someone next to the robot)");
+}
+
+void stopEverything(const char *why)
+{
+    keyUntilMs = 0;
+    lfrTestUntilMs = 0;
+    fingerTest = false;
+    manualLeftSpeed = 0;
+    manualRightSpeed = 0;
+    obstacleDetected = true;
+    stopMotors();
+    Serial.print("STOPPED ");
+    Serial.println(why);
+}
+
+void startKeyDrive(int l, int r, const char *name)
+{
+    lfrTestUntilMs = 0;
+    fingerTest = false;
+    controlMode = MANUAL_MODE;
+    obstacleDetected = false;
+    resetLineState();
+    manualLeftSpeed = constrain(l, -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
+    manualRightSpeed = constrain(r, -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
+    keyUntilMs = millis() + KEY_HOLD_MS;
+    if (keyUntilMs == 0) keyUntilMs = 1;
+    Serial.print("KEY ");
+    Serial.print(name);
+    Serial.print(" L=");
+    Serial.print(manualLeftSpeed);
+    Serial.print(" R=");
+    Serial.println(manualRightSpeed);
+}
+
+void startLfrTest()
+{
+    keyUntilMs = 0;
+    fingerTest = false;
+    controlMode = AUTO_MODE;
+    obstacleDetected = false;
+    resetLineState();
+    lfrTestUntilMs = millis() + LFR_TEST_MS;
+    if (lfrTestUntilMs == 0) lfrTestUntilMs = 1;
+    Serial.println("LFR 60 s: line following without the Pi (x = stop, l again = 60 s more)");
+}
+
+// ---- "t" finger test: no fingers = the empty reading; a finger flips that sensor = the line there ----
+byte readRawBits()
+{
+    byte b = 0;
+    for (int n = 0; n < 5; n++) if (digitalRead(IR_PINS[n]) == HIGH) b |= (1 << n);
+    return b;
+}
+
+void startFingerTest()
+{
+    stopEverything("(finger test)");
+    fingerBase = readRawBits();
+    fingerTest = true;
+    fingerUntilMs = millis() + FINGER_TEST_MS;
+    if (fingerUntilMs == 0) fingerUntilMs = 1;
+    resetLineState();
+    Serial.print("FINGER TEST 2 min. WHEELS LIFTED. No fingers reads raw ");
+    for (int n = 0; n < 5; n++) Serial.print((fingerBase >> n) & 1);
+    Serial.println(" -> a finger on a sensor = the line there. x = stop");
+    if (fingerBase != 0 && fingerBase != 0x1F)
+    {
+        Serial.println("FINGER WARNING: the sensors don't agree. Take fingers away, nothing near the array, then t again.");
+    }
+}
+
+void fingerStep()
+{
+    if (!timeBefore(fingerUntilMs))
+    {
+        fingerTest = false;
+        obstacleDetected = true;
+        stopMotors();
+        Serial.println("FINGER TEST done (t = again)");
+        return;
+    }
+    unsigned long now = millis();
+    if (!lfrDueNow && now - lastLfrCycleMs < LFR_CYCLE_MS) return;
+    lfrDueNow = false;
+    lastLfrCycleMs = now;
+
+    byte on = readRawBits() ^ fingerBase;            // bit n = finger on S(n+1)
+    int s1 = (on & 1) ? 1 : 0, s2 = (on & 2) ? 1 : 0, s3 = (on & 4) ? 1 : 0, s4 = (on & 8) ? 1 : 0, s5 = (on & 16) ? 1 : 0;
+    const char *what = lfrDecide(s1, s2, s3, s4, s5);
+    Serial.print("FINGER ");
+    Serial.println(what);
+    printSensorLine(s1, s2, s3, s4, s5);
+}
+
+// Returns true when the line was a Serial Monitor tool command.
+bool handleToolCommand(String command)
+{
+    String u = command;
+    u.toUpperCase();
+
+    // single keys; "wwww" (the same key repeated) counts as one press
+    bool sameKey = command.length() >= 1 && command.length() <= 8;
+    for (unsigned int n = 1; n < command.length() && sameKey; n++)
+    {
+        if (u.charAt(n) != u.charAt(0)) sameKey = false;
+    }
+    if (sameKey && strchr("WASDX+-VIH?L1T", u.charAt(0)) != NULL)
+    {
+        switch (u.charAt(0))
+        {
+            case 'W': startKeyDrive(keySpeed, keySpeed, "w forward"); return true;
+            case 'S': startKeyDrive(-keySpeed, -keySpeed, "s back"); return true;
+            case 'A': startKeyDrive(-keySpeed, keySpeed, "a pivot left"); return true;
+            case 'D': startKeyDrive(keySpeed, -keySpeed, "d pivot right"); return true;
+            case 'X': stopEverything("(x)"); return true;
+            case '+': keySpeed = min(MAX_MANUAL_SPEED, keySpeed + KEY_SPEED_STEP); Serial.print("KEY speed "); Serial.println(keySpeed); return true;
+            case '-': keySpeed = max(KEY_SPEED_STEP, keySpeed - KEY_SPEED_STEP); Serial.print("KEY speed "); Serial.println(keySpeed); return true;
+            case 'V': viewOn = !viewOn; Serial.println(viewOn ? "VIEW on (v = off)" : "VIEW off (v = on)"); return true;
+            case 'I':
+            {
+                int s1, s2, s3, s4, s5;
+                readLine(s1, s2, s3, s4, s5);
+                printSensorLine(s1, s2, s3, s4, s5);
+                return true;
+            }
+            case 'T': startFingerTest(); return true;
+            case 'H': case '?': printHelp(); return true;
+            case 'L': case '1': startLfrTest(); return true;
+            default: return false;
+        }
+    }
+    if (u == "VIEW 0" || u == "VIEW 1") { viewOn = (u == "VIEW 1"); return true; }
+    if (u == "STAT") { printStat(); return true; }
+    if (u == "SETTINGS") { printSettings(); return true; }
+    if (u == "TESTL" || u == "TESTR")
+    {
+        bool left = (u == "TESTL");
+        startKeyDrive(left ? keySpeed : 0, left ? 0 : keySpeed,
+                      left ? "TESTL only the LEFT wheel, forward (wrong wheel: SWAP, backward: FLIPL)"
+                           : "TESTR only the RIGHT wheel, forward (wrong wheel: SWAP, backward: FLIPR)");
+        return true;
+    }
+    if (u == "FLIPL") { if (swapSides) flipB = !flipB; else flipA = !flipA; saveFixes(); printSettings(); return true; }
+    if (u == "FLIPR") { if (swapSides) flipA = !flipA; else flipB = !flipB; saveFixes(); printSettings(); return true; }
+    if (u == "SWAP")  { swapSides = !swapSides; saveFixes(); printSettings(); return true; }
+    if (u == "FACTORY")
+    {
+        flipA = flipB = swapSides = false;
+        saveFixes();
+        Serial.println("FACTORY: wheel fixes cleared");
+        printSettings();
+        return true;
+    }
+    return false;
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  PI COMMANDS
+// ════════════════════════════════════════════════════════════════════════════
+
+void runCommand(String command)
+{
+    command.trim();
+    if (command.length() == 0) return;
+
+    if (command == "SAFE" || command == "STOP" || command.startsWith("MODE:") || command.startsWith("DRIVE:"))
+    {
+        keyUntilMs = 0;                      // the Pi is in charge again
+        lfrTestUntilMs = 0;
+        if (fingerTest) { fingerTest = false; stopMotors(); }
+    }
+
+    if (handleToolCommand(command)) return;
+
+    if (command == "STOP")
+    {
+        lastSafetyHeartbeatMs = millis();
+        obstacleDetected = true;
+        manualLeftSpeed = 0;
+        manualRightSpeed = 0;
+    }
+    else if (command == "SAFE" || command == "MODE:AUTO")
+    {
+        lastSafetyHeartbeatMs = millis();
+        if (controlMode != AUTO_MODE || obstacleDetected) resetLineState();
+        controlMode = AUTO_MODE;
+        obstacleDetected = false;
+    }
+    else if (command == "MODE:MANUAL")
+    {
+        lastSafetyHeartbeatMs = millis();
+        if (controlMode != MANUAL_MODE)
+        {
+            manualLeftSpeed = 0;
+            manualRightSpeed = 0;
+        }
+        controlMode = MANUAL_MODE;
+        obstacleDetected = false;
+        resetLineState();
+    }
+    else if (command.startsWith("DRIVE:"))
+    {
+        int comma = command.indexOf(',', 6);
+        if (controlMode == MANUAL_MODE && comma > 6)
+        {
+            manualLeftSpeed = constrain(command.substring(6, comma).toInt(), -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
+            manualRightSpeed = constrain(command.substring(comma + 1).toInt(), -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
+            lastSafetyHeartbeatMs = millis();
+        }
+    }
+    else if (command == "RESET_QR")
+    {
+        resetQROutputs();
+    }
+    else if (command.startsWith("QR:"))
+    {
+        int qrValue = command.substring(3).toInt();   // QR commands never count as a heartbeat
+        if (qrValue >= 1 && qrValue <= 10)
+        {
+            resetQROutputs();
+            qrOutputs[qrValue - 1] = true;
+        }
+    }
+}
 
 void processSerialCommands()
 {
     while (Serial.available() > 0)
     {
         char incoming = Serial.read();
-
         if (incoming == '\n' || incoming == '\r')
         {
             String command = serialBuffer;
             serialBuffer = "";
-            command.trim();
-
-            if (command.length() == 0)
-            {
-                continue;
-            }
-
-            if (command == "STOP")
-            {
-                lastSafetyHeartbeatMs = millis();
-                obstacleDetected = true;
-                if (manualMode)                       // [CTRL-2.1] E-stop in manual: halt now
-                {
-                    manualHalt();
-                }
-            }
-            else if (command == "SAFE")
-            {
-                lastSafetyHeartbeatMs = millis();
-                obstacleDetected = false;
-            }
-            else if (command == "RESET_QR")
-            {
-                resetQROutputs();
-            }
-            else if (command.startsWith("MAN:"))     // [CTRL-2.1]
-            {
-                int comma = command.indexOf(',', 4);
-                if (comma > 4)
-                {
-                    int l = command.substring(4, comma).toInt();
-                    int r = command.substring(comma + 1).toInt();
-                    enterManual();
-                    manTargetL = constrain(l, -MANUAL_MAX_PWM, MANUAL_MAX_PWM);
-                    manTargetR = constrain(r, -MANUAL_MAX_PWM, MANUAL_MAX_PWM);
-                    lastManualMs = millis();
-                }
-            }
-            else if (command == "AUTO")              // [CTRL-2.1]
-            {
-                leaveManual();
-            }
-            else if (command == "STAT")              // [CTRL-2.1]
-            {
-                printStatus();
-            }
-            else if (command.startsWith("QR:"))
-            {
-                // QR commands never touch lastSafetyHeartbeatMs.
-                int qrValue = command.substring(3).toInt();
-                if (qrValue >= 1 && qrValue <= 10)
-                {
-                    resetQROutputs();
-                    qrOutputs[qrValue - 1] = true;
-                }
-            }
+            runCommand(command);
         }
         else
         {
             serialBuffer += incoming;
-            if (serialBuffer.length() > 64)          // [CTRL-2.1] garbage without newline: drop it
-            {
-                serialBuffer = "";
-            }
+            lastCharMs = millis();
+            if (serialBuffer.length() > 64) serialBuffer = "";   // garbage without a newline
         }
     }
 
-    if ((millis() - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS)
+    // "No line ending" in the Serial Monitor: run what arrived after a short pause
+    if (serialBuffer.length() > 0 && millis() - lastCharMs > 80)
+    {
+        String command = serialBuffer;
+        serialBuffer = "";
+        command.trim();
+        if (command.length() > 0) handleToolCommand(command);
+    }
+
+    if ((millis() - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS && !localHold())
     {
         obstacleDetected = true;
-        if (!manualMode)                             // [CTRL-2.1] manual has its own 0.5 s watchdog
-        {
-            stopMotors();
-        }
+        stopMotors();
     }
 }
 
-// ==========================================
-// SETUP
-// ==========================================
+// ════════════════════════════════════════════════════════════════════════════
+//  SETUP / LOOP
+// ════════════════════════════════════════════════════════════════════════════
 
-void setup()
-{
-#if USE_HW_WATCHDOG && defined(ARDUINO_ARCH_AVR)
-    MCUSR = 0;
-    wdt_disable();
-#endif
+void setup() {
+  Serial.begin(SERIAL_BAUD);
+  serialBuffer.reserve(32);
 
-    Serial.begin(115200);
-    serialBuffer.reserve(32);
+  // Configure motor control pins as outputs
+  pinMode(MOTOR_L_PIN1, OUTPUT);
+  pinMode(MOTOR_L_PIN2, OUTPUT);
+  pinMode(MOTOR_R_PIN1, OUTPUT);
+  pinMode(MOTOR_R_PIN2, OUTPUT);
 
-    for (int i = 0; i < 5; i++)
-    {
-        pinMode(IR_PINS[i], INPUT);
-    }
+  // Configure IR sensor pins as inputs
+  for (int i = 0; i < 5; i++) {
+    pinMode(IR_PINS[i], INPUT);
+  }
 
-    pinMode(MOTOR_L_PIN1, OUTPUT);
-    pinMode(MOTOR_L_PIN2, OUTPUT);
-    pinMode(MOTOR_R_PIN1, OUTPUT);
-    pinMode(MOTOR_R_PIN2, OUTPUT);
+  pinMode(BUZZER_PIN, OUTPUT);
 
-    pinMode(BUZZER_PIN, OUTPUT);
+  for (int i = 0; i < 10; i++)
+  {
+    pinMode(QR_OUTPUT_PINS[i], OUTPUT);
+    digitalWrite(QR_OUTPUT_PINS[i], LOW);
+  }
 
-    for (int i = 0; i < 10; i++)
-    {
-        pinMode(QR_OUTPUT_PINS[i], OUTPUT);
-        digitalWrite(QR_OUTPUT_PINS[i], LOW);
-    }
+  stopMotors();
+  digitalWrite(BUZZER_PIN, LOW);
+  lastSafetyHeartbeatMs = millis();
+  loadFixes();
 
-    stopMotors();
+  Serial.println("MediCart ready");
+  Serial.println("FW medicart 3.1");             // the Pi checks this
+  Serial.println("Type l to line-follow without the Pi, h for help, v to stop/start the live view.");
+}
+
+void loop() {
+  processSerialCommands();
+
+  if (fingerTest)                                // "t": no Pi timeout, no buzzer
+  {
+    fingerStep();
     digitalWrite(BUZZER_PIN, LOW);
-    lastSafetyHeartbeatMs = millis();
-
-    Serial.println("MediCart ready");
-    Serial.println("FW medicart-ctrl 2.1");      // [CTRL-2.1] lets the Pi know manual drive is available
-
-#if USE_HW_WATCHDOG && defined(ARDUINO_ARCH_AVR)
-    wdt_enable(WDTO_2S);
-#endif
-}
-
-// ==========================================
-// MAIN LOOP
-// ==========================================
-
-void loop()
-{
-#if USE_HW_WATCHDOG && defined(ARDUINO_ARCH_AVR)
-    wdt_reset();
-#endif
-
-    processSerialCommands();
-
-    if (manualMode)                 // [CTRL-2.1] manual: Pi drives the wheels directly
-    {
-        manualDrive();
-    }
-    else                            // AUTO: Rifat's original loop, unchanged
-    {
-        buzzerControl();
-
-        if (obstacleDetected)
-        {
-            stopMotors();
-            resetLineState();   // a safety stop is not "line lost"; also restarts intersection/search timers
-        }
-        else
-        {
-            lineFollowing();
-        }
-
-        lineLostBeep();
-    }
-    debugReport();
     updateQROutputs();
+    return;
+  }
+  if (keyUntilMs != 0 && !timeBefore(keyUntilMs))   // key press time is up
+  {
+    keyUntilMs = 0;
+    manualLeftSpeed = 0;
+    manualRightSpeed = 0;
+  }
+  if (lfrTestUntilMs != 0 && !timeBefore(lfrTestUntilMs))
+  {
+    lfrTestUntilMs = 0;
+    Serial.println("LFR done (l = 60 s more)");
+  }
+  buzzerControl();
+
+  bool following = false;
+  if (obstacleDetected)
+  {
+    stopMotors();
+    resetLineState();                            // a safety stop is not "line lost"
+  }
+  else if (controlMode == MANUAL_MODE)
+  {
+    drive(manualLeftSpeed, manualRightSpeed);
+    resetLineState();
+  }
+  else
+  {
+    lineFollowing();
+    following = true;
+  }
+
+  lineLostBeep();
+  debugReport();
+  updateQROutputs();
+
+  if (viewOn && !following && millis() - lastViewMs >= VIEW_EVERY_MS)
+  {
+    lastViewMs = millis();
+    printView();
+  }
 }

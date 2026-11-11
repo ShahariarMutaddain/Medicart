@@ -4,8 +4,10 @@
 #include <thread>
 #include <unistd.h>
 #include <fcntl.h>
-unsigned long g_ms = 0; int g_pwm[64] = {0}; int g_dig[80] = {0}; int g_ir[5] = {1,1,0,1,1};
+unsigned long g_ms = 0; int g_pwm[64] = {0}; int g_dig[80] = {0}; int g_ir[5] = {1,1,0,1,1}; int g_an[5] = {900,900,100,900,900};
 SerialMock Serial;
+#include "../firmware/EEPROM.h"
+EEPROMMock EEPROM;
 #include FIRMWARE
 int main() {
   auto t0 = std::chrono::steady_clock::now();

@@ -9,7 +9,8 @@
 #    • Wi-Fi setup portal  (hotspot + captive page when no Wi-Fi)
 #    • Cart screen kiosk   (Chromium full-screen → /cart page, autostart)
 #    • Vision service      (optional: runs medicart.py headless at boot)
-#    • Drive controller    (medicart-control: AUTO / MANUAL / STOP, owns the Arduino port,
+#    • Driving control     (MediCart 3.0: Rifat's web dashboard inside medicart.py on port 5000,
+#                           the Vercel console's Drive page via Firebase, SSH: medicart-drive;
 #                           web + SSH manual driving; needs Arduino firmware 2.1 for MANUAL)
 #
 #  Usage:   cd raspberry_pi && sudo ./install.sh
@@ -70,21 +71,23 @@ ask AP_PASSWORD "Password of the setup hotspot (8+ chars)" "medicart-setup"
 EXISTING_VS="$(sed -n 's/^VISION_SCRIPT=//p' /etc/medicart/medicart.env 2>/dev/null || true)"
 ask VISION_SCRIPT "Path to medicart.py to run at boot (blank = skip)" "$EXISTING_VS"
 
-# drive controller (manual + autonomous)
+# driving control (MediCart 3.0): dashboard + Vercel Drive page + SSH
 cget() { sed -n "s/^$1=//p" /etc/medicart/control.env 2>/dev/null | head -1; }
 INSTALL_CONTROL="${INSTALL_CONTROL:-}"
-ask INSTALL_CONTROL "Install the drive controller (manual + auto driving)? y/n" "y"
+ask INSTALL_CONTROL "Set up driving control (Pi dashboard + Vercel Drive page)? y/n" "y"
 case "$INSTALL_CONTROL" in [yY]*) INSTALL_CONTROL=1;; *) INSTALL_CONTROL=0;; esac
 if [ "$INSTALL_CONTROL" = 1 ]; then
   CONTROL_EMAIL="${CONTROL_EMAIL:-$(cget CONTROL_EMAIL)}"
   CONTROL_PASSWORD="${CONTROL_PASSWORD:-$(cget CONTROL_PASSWORD)}"
   FIREBASE_API_KEY="${FIREBASE_API_KEY:-$(cget FIREBASE_API_KEY)}"
   FIREBASE_DB_URL="${FIREBASE_DB_URL:-$(cget FIREBASE_DB_URL)}"
+  DASHBOARD_PASSWORD="${DASHBOARD_PASSWORD:-$(cget DASHBOARD_PASSWORD)}"
   ask CONTROL_EMAIL "Cart account email (Firebase, same as the cart screen)" "cart01@medicart.iub"
   ask_secret CONTROL_PASSWORD "Cart account password (hidden; stays on this Pi)"
   ask FIREBASE_API_KEY "Firebase apiKey" "AIzaSyAjDepmO5m_fiWIy_HPcVnN2uHtMwGPv7M"
   ask FIREBASE_DB_URL "Firebase databaseURL" "https://medicart-e20e0-default-rtdb.asia-southeast1.firebasedatabase.app"
-  [ -n "$CONTROL_PASSWORD" ] || warn "No cart password: web driving stays off until you add it to /etc/medicart/control.env"
+  ask_secret DASHBOARD_PASSWORD "Password for the Pi dashboard from other devices (hidden; blank = only on the Pi)"
+  [ -n "$CONTROL_PASSWORD" ] || warn "No cart password: the Vercel Drive page stays off until you add it to /etc/medicart/control.env"
 fi
 
 # ─── Packages ────────────────────────────────────────────────────
@@ -191,40 +194,39 @@ if command -v raspi-config >/dev/null 2>&1; then
   ok "Auto-login to desktop, screen stays on"
 fi
 
-# ─── Drive controller ────────────────────────────────────────────
-VISION_SERIAL_LINE=""
+# ─── Driving control (MediCart 3.0) ──────────────────────────────
 if [ "$INSTALL_CONTROL" = 1 ]; then
-  say "Installing the drive controller (medicart-control)…"
+  say "Setting up driving control (dashboard + Vercel Drive page + SSH)…"
+  # the old separate controller (MediCart 2.1) is replaced by Rifat's dashboard inside medicart.py
+  if systemctl list-unit-files medicart-control.service >/dev/null 2>&1; then
+    systemctl disable --now medicart-control.service >/dev/null 2>&1 || true
+    rm -f /etc/systemd/system/medicart-control.service
+  fi
   install -d -m 755 /opt/medicart/control
-  install -m 755 "$SRC/control/medicart_control.py" /opt/medicart/control/
   install -m 755 "$SRC/control/medicart-drive" /opt/medicart/control/
   ln -sf /opt/medicart/control/medicart-drive /usr/local/bin/medicart-drive
+  DASH_HOST=127.0.0.1
+  [ -n "$DASHBOARD_PASSWORD" ] && DASH_HOST=0.0.0.0
   umask 077
   cat > /etc/medicart/control.env <<EOF
-# MediCart drive controller — written by install.sh (root only). See control.env.example.
+# MediCart 3.0 driving control — written by install.sh (root only). See control.env.example.
 CART_ID=medicart-01
 FIREBASE_API_KEY=$FIREBASE_API_KEY
 FIREBASE_DB_URL=$FIREBASE_DB_URL
 CONTROL_EMAIL=$CONTROL_EMAIL
 CONTROL_PASSWORD=$CONTROL_PASSWORD
-ARDUINO_PORT=auto
-VISION_TTY=/run/medicart/vision-tty
-START_MODE=${START_MODE:-AUTO}
-MANUAL_MAX_PWM=${MANUAL_MAX_PWM:-160}
-MANUAL_SLOW_PWM=${MANUAL_SLOW_PWM:-90}
-DRIVE_TIMEOUT_S=0.6
+DASHBOARD_HOST=$DASH_HOST
+DASHBOARD_PORT=5000
+DASHBOARD_PASSWORD=$DASHBOARD_PASSWORD
+START_MODE=${START_MODE:-stopped}
+MANUAL_SPEED=${MANUAL_SPEED:-40}
 EOF
   umask 022
   chmod 600 /etc/medicart/control.env
-  sed "s/@USER@/$TARGET_USER/" "$SRC/systemd/medicart-control.service.in" > /etc/systemd/system/medicart-control.service
   usermod -aG dialout "$TARGET_USER" || true
   # ModemManager grabs /dev/ttyACM* for a few seconds at plug-in; MediCart doesn't need it
   systemctl disable --now ModemManager >/dev/null 2>&1 || true
-  systemctl daemon-reload
-  systemctl enable medicart-control.service >/dev/null
-  systemctl restart medicart-control.service || warn "medicart-control did not start — journalctl -u medicart-control"
-  VISION_SERIAL_LINE="MEDICART_SERIAL_PORT=/run/medicart/vision-tty"
-  ok "Drive controller running — web Drive page + 'medicart-drive' over SSH"
+  ok "Driving control configured (dashboard on port 5000$([ "$DASH_HOST" = 127.0.0.1 ] && echo ', this Pi only'))"
 fi
 
 # ─── Vision service ──────────────────────────────────────────────
@@ -242,27 +244,20 @@ if [ -n "$VISION_SCRIPT" ]; then
 VISION_SCRIPT=$VISION_SCRIPT
 VISION_PYTHON=$VISION_PYTHON
 MEDICART_VIDEO_SOURCE=$VISION_CAMERA
-$VISION_SERIAL_LINE
 EOF
-  # medicart.py needs the 5-line [CTRL-2.1] port option to share the Arduino with the controller
-  if [ -n "$VISION_SERIAL_LINE" ] && [ -f "$VISION_SCRIPT" ] && ! grep -q MEDICART_SERIAL_PORT "$VISION_SCRIPT"; then
-    cp -n "$VISION_SCRIPT" "$VISION_SCRIPT.original"
-    python3 - "$VISION_SCRIPT" <<'PY'
-import sys
-p = sys.argv[1]; s = open(p).read()
-old = 'SERIAL_PORT_CANDIDATES = ("/dev/ttyACM0", "/dev/ttyACM1")\n'
-add = ('# [CTRL-2.1] When the medicart-control service owns the Arduino, it gives this script its own\n'
-       '# virtual port (MEDICART_SERIAL_PORT=/run/medicart/vision-tty). Not set = original behaviour.\n'
-       'if os.environ.get("MEDICART_SERIAL_PORT"):\n'
-       '    SERIAL_PORT = os.environ["MEDICART_SERIAL_PORT"]\n'
-       '    SERIAL_PORT_CANDIDATES = (SERIAL_PORT,)\n')
-if old in s:
-    open(p, "w").write(s.replace(old, old + add, 1)); print("patched")
-else:
-    print("pattern not found")
-PY
-    chown "$TARGET_USER:$TARGET_USER" "$VISION_SCRIPT" || true
-    ok "medicart.py: added the MEDICART_SERIAL_PORT option (backup: $VISION_SCRIPT.original)"
+  # MediCart 3.0: medicart.py runs Rifat's web dashboard; it needs flask + requests in its Python
+  if [ "$INSTALL_CONTROL" = 1 ]; then
+    if [ -f "$VISION_SCRIPT" ] && ! grep -q "DASH-3" "$VISION_SCRIPT"; then
+      warn "$VISION_SCRIPT has no dashboard code: copy MideCart/vision/ from the kit (medicart.py, web_dashboard.py, drive_link.py, firebase_bridge.py, templates/, static/)"
+    fi
+    for f in web_dashboard.py drive_link.py firebase_bridge.py templates/dashboard.html static/dashboard.js; do
+      [ -e "$VDIR/$f" ] || warn "missing $VDIR/$f (copy MideCart/vision/ from the kit)"
+    done
+    if [ -x "$VISION_PYTHON" ] || command -v "$VISION_PYTHON" >/dev/null; then
+      say "Installing flask + requests for medicart.py…"
+      sudo -u "$TARGET_USER" "$VISION_PYTHON" -m pip install -q flask requests \
+        || warn "pip install flask requests failed — run:  $VISION_PYTHON -m pip install flask requests"
+    fi
   fi
   sed "s/@USER@/$TARGET_USER/" "$SRC/systemd/medicart-vision.service.in" > /etc/systemd/system/medicart-vision.service
   usermod -aG dialout "$TARGET_USER" || true
@@ -286,9 +281,10 @@ cat <<EOF
   Logs .................... journalctl -u medicart-camera -f
                             journalctl -u medicart-wifi-portal -f
                             journalctl -u medicart-vision -f
-                            journalctl -u medicart-control -f
-  Drive controller ........ web console → Drive page,  or over SSH:  medicart-drive
-                            needs Arduino firmware 2.1 for MANUAL (AUTO works with any)
+  Driving control ......... Pi dashboard  http://$(hostname).local:5000  (password = the one you set)
+                            Vercel console → Drive page · SSH: medicart-drive
+                            needs Arduino firmware 3.1 (arduino/medicart/medicart.ino)
+                            starts STOPPED: choose Auto or Manual on a dashboard
 
   First boot: the cart screen asks for the CART account (Firebase) once.
   It uses the "MediCart-Call" camera automatically. Hold the gear (bottom-right)

@@ -1,0 +1,71 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MediCart Pi Dashboard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='dashboard.css') }}">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo">M</span><div><b>MediCart</b><small>Pi dashboard · robot medicart-01</small></div></div>
+    <div class="top-pills">
+      <span class="pill" id="pMode">—</span>
+      <span class="pill" id="pSerial">Arduino —</span>
+      <span class="pill" id="pVision">Vision —</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="card video-card" aria-label="Camera">
+      <div class="video-wrap">
+        <img id="video" src="{{ url_for('video_feed') }}" alt="Live camera with person detection">
+        <div class="video-off" id="videoOff" hidden>Camera not running</div>
+        <div class="video-tags">
+          <span id="vPeople">0 people</span><span id="vNear">nearest —</span><span id="vFps">— fps</span>
+        </div>
+      </div>
+      <dl class="stats">
+        <div><dt>Vision</dt><dd id="sVision">—</dd></div>
+        <div><dt>Inference</dt><dd id="sInf">—</dd></div>
+        <div><dt>Frame latency</dt><dd id="sLat">—</dd></div>
+        <div><dt>Firmware</dt><dd id="sFw">—</dd></div>
+        <div><dt>Line sensors S1–S5</dt><dd><span class="ir" id="sLine"><i></i><i></i><i></i><i></i><i></i></span></dd></div>
+        <div><dt>Keys</dt><dd id="sKeys">---</dd></div>
+      </dl>
+    </section>
+
+    <section class="card ctl-card" aria-label="Controls">
+      <div class="modes" role="group" aria-label="Driving mode">
+        <button type="button" class="mode" id="bAuto"><b>Auto</b><span>Follows the line · stops for people</span></button>
+        <button type="button" class="mode" id="bManual"><b>Manual</b><span>Drive from this page</span></button>
+      </div>
+      <button type="button" class="estop" id="bStop"><span class="cap"></span>Emergency stop</button>
+      <p class="note" id="note">Connecting to the robot…</p>
+
+      <div class="drive">
+        <div class="pad locked" id="pad" tabindex="0" role="application" aria-label="Drive pad: press and drag, or hold W A S D / arrow keys">
+          <span class="lbl f">W</span><span class="lbl b">S</span><span class="lbl l">A</span><span class="lbl r">D</span>
+          <div class="knob" id="knob"></div>
+        </div>
+        <div class="side">
+          <label for="speed">Speed <b id="speedVal">40</b> / <span id="speedMax">180</span></label>
+          <input type="range" id="speed" min="0" max="180" step="5" value="40">
+          <div class="wheels">
+            <div><span>L</span><div class="bar"><i id="wL"></i></div><b id="wLv">0</b></div>
+            <div><span>R</span><div class="bar"><i id="wR"></i></div><b id="wRv">0</b></div>
+          </div>
+          <div class="alert" id="alert" hidden></div>
+          <p class="help">Hold <kbd>W</kbd> <kbd>A</kbd> <kbd>S</kbd> <kbd>D</kbd> or the arrows, or drag the knob. Let go and it stops within half a second. <kbd>Space</kbd> stops driving · <kbd>Esc</kbd> emergency stop.</p>
+        </div>
+      </div>
+    </section>
+
+    <section class="card log-card" aria-label="Events">
+      <h2>Events</h2>
+      <ol id="events"><li class="empty">No events yet.</li></ol>
+    </section>
+  </main>
+  <script src="{{ url_for('static', filename='dashboard.js') }}"></script>
+</body>
+</html>

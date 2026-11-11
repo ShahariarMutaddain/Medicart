@@ -6,13 +6,16 @@
 #include <cstdint>
 #include <deque>
 #include <algorithm>
+#include <cstring>
 typedef uint8_t byte;
 #define HIGH 1
 #define LOW 0
 #define INPUT 0
 #define OUTPUT 1
 enum { A8 = 62, A9, A10, A11, A12 };
-extern unsigned long g_ms; extern int g_pwm[64]; extern int g_dig[80]; extern int g_ir[5];
+extern unsigned long g_ms; extern int g_pwm[64]; extern int g_dig[80]; extern int g_ir[5]; extern int g_an[5];
+#define F(x) (x)
+inline int analogRead(int p) { return (p >= A8 && p <= A12) ? g_an[p - A8] : 0; }
 inline unsigned long millis() { return g_ms; }
 inline void pinMode(int, int) {}
 inline void analogWrite(int p, int v) { g_pwm[p] = v; }
@@ -28,6 +31,7 @@ class String {
   String& operator+=(char c) { s += c; return *this; }
   String& operator=(const char* c) { s = c; return *this; }
   bool operator==(const char* c) const { return s == c; }
+  bool operator!=(const char* c) const { return s != c; }
   unsigned length() const { return s.size(); }
   void trim() { size_t a = s.find_first_not_of(" \t\r\n"); size_t b = s.find_last_not_of(" \t\r\n"); s = (a == std::string::npos) ? "" : s.substr(a, b - a + 1); }
   bool startsWith(const char* p) const { return s.rfind(p, 0) == 0; }
@@ -35,6 +39,9 @@ class String {
   String substring(unsigned a, unsigned b) const { return String(s.substr(a, b - a)); }
   int indexOf(char c, unsigned from = 0) const { size_t i = s.find(c, from); return i == std::string::npos ? -1 : (int)i; }
   long toInt() const { return atol(s.c_str()); }
+  char charAt(unsigned i) const { return i < s.size() ? s[i] : 0; }
+  void toUpperCase() { for (auto& c : s) c = toupper(c); }
+  float toFloat() const { return (float)atof(s.c_str()); }
 };
 struct SerialMock {
   std::deque<char> in; std::string out;
@@ -44,6 +51,8 @@ struct SerialMock {
   void feed(const std::string& x) { for (char c : x) in.push_back(c); }
   template<class T> void print(T v) { out += std::to_string(v); }
   void print(const char* v) { out += v; }
+  void print(char v) { out += v; }
+  void print(float v, int d) { char b[32]; snprintf(b, sizeof b, "%.*f", d, v); out += b; }
   void print(const String& v) { out += v.s; }
   template<class T> void println(T v) { print(v); out += "\n"; }
   void println() { out += "\n"; }

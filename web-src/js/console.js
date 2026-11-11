@@ -350,13 +350,13 @@ function renderCartSystem() {
 }
 
 // ════════════════════════════════════════════════════════════════
-//  Drive — manual + autonomous control (robot side: medicart-control on the Pi)
+//  Drive — manual + autonomous control (robot side: medicart.py + Rifat's dashboard on the Pi)
 //  carts/<id>/control/request  {mode AUTO|MANUAL|STOP, by, name, id, at}   ← console / SSH
 //  carts/<id>/control/drive    {l, r, seq, by, name, at}  every 150 ms while held
 //  carts/<id>/control/state    written by the Pi once a second
 // ════════════════════════════════════════════════════════════════
 const ctlPath = `carts/${CART_ID}/control`;
-const DRV = { state: null, request: null, held: false, keys: new Set(), x: 0, y: 0, l: 0, r: 0, seq: 0, timer: null, disc: false, speed: 120 };
+const DRV = { state: null, request: null, held: false, keys: new Set(), x: 0, y: 0, l: 0, r: 0, seq: 0, timer: null, disc: false, speed: 40 };
 const KEYMAP = { KeyW: 'f', ArrowUp: 'f', KeyS: 'b', ArrowDown: 'b', KeyA: 'l', ArrowLeft: 'l', KeyD: 'r', ArrowRight: 'r' };
 
 function myName() { return S.user?.displayName || S.user?.email || 'Console'; }
@@ -373,7 +373,7 @@ function initDrive() {
   el('modeManual').addEventListener('click', () => requestMode('MANUAL'));
   el('estopBtn').addEventListener('click', () => requestMode('STOP'));
 
-  try { const v = parseInt(localStorage.getItem('mc-drive-speed') || '', 10); if (v >= 40 && v <= 200) DRV.speed = v; } catch { /* storage blocked */ }
+  try { const v = parseInt(localStorage.getItem('mc-drive-speed') || '', 10); if (v >= 20 && v <= 180) DRV.speed = v; } catch { /* storage blocked */ }
   const spd = el('spd');
   spd.value = DRV.speed; el('spdVal').textContent = DRV.speed;
   spd.addEventListener('input', () => {
@@ -422,10 +422,10 @@ function initDrive() {
 
 function driveLockReason() {
   const st = DRV.state;
-  if (!ctlOnline()) return 'The robot\'s drive controller is offline.';
+  if (!ctlOnline()) return 'The robot program on the Pi is offline.';
   if (st.mode === 'STOP') return 'Emergency stop is on. Choose Manual to drive.';
   if (st.mode !== 'MANUAL') return 'Switch to Manual first.';
-  if (!st.manualCapable) return 'Manual driving needs Arduino firmware 2.1.';
+  if (!st.manualCapable) return 'Manual driving needs Arduino firmware 3.1.';
   if (st.arduino !== 'online') return 'The Arduino is not connected.';
   return 'Driving is not available right now.';
 }
@@ -516,19 +516,19 @@ function renderDrive() {
   cp.className = `pill ${on ? 'ok' : 'crit'}`; cp.textContent = on ? 'Controller online' : 'Controller offline';
   const mp = el('drvModePill');
   mp.className = `pill ${mode === 'STOP' ? 'crit' : mode === 'MANUAL' ? 'warn' : mode === 'AUTO' ? 'info' : ''}`;
-  mp.textContent = mode === 'STOP' ? 'EMERGENCY STOP' : mode || '—';
+  mp.textContent = mode === 'STOP' ? (st.modeBy === 'start-up' ? 'STOPPED' : 'EMERGENCY STOP') : mode || '—';
   el('modeAuto').classList.toggle('on', mode === 'AUTO');
   el('modeManual').classList.toggle('on', mode === 'MANUAL');
   el('modeManual').disabled = on && !st.manualCapable;
   el('estopBtn').classList.toggle('latched', mode === 'STOP');
 
   let note;
-  if (!on) note = st ? `The drive controller on the Pi stopped reporting ${fmtAgo(serverNow() - (st.updatedAt || 0))} ago. Requests are saved and applied when it reconnects.` : 'Waiting for the robot\'s drive controller (medicart-control on the Pi)…';
+  if (!on) note = st ? `The robot program on the Pi stopped reporting ${fmtAgo(serverNow() - (st.updatedAt || 0))} ago. Requests are saved and applied when it reconnects.` : 'Waiting for the robot program (medicart.py on the Pi)…';
   else if (want && want !== st.mode) note = `Requested ${want}… waiting for the robot.`;
-  else if (st.mode === 'AUTO') note = 'The cart follows the line by itself. medicart.py stops it for people.';
-  else if (st.mode === 'MANUAL') note = st.manualCapable ? `Manual: drive with the pad. Set by ${st.modeBy || '—'}.` : 'Manual needs Arduino firmware 2.1.';
-  else note = `Stopped by ${st.modeBy || '—'}. Choose Auto or Manual to release.`;
-  if (on && !st.manualCapable) note += ' Manual driving needs Arduino firmware 2.1 on the Mega.';
+  else if (st.mode === 'AUTO') note = 'The cart follows the line by itself. The camera stops it for people.';
+  else if (st.mode === 'MANUAL') note = st.manualCapable ? `Manual: drive with the pad. Set by ${st.modeBy || '—'}.` : 'Manual needs Arduino firmware 3.1.';
+  else note = `Stopped (${st.modeBy || '—'}). The robot starts stopped after every restart. Choose Auto or Manual.`;
+  if (on && !st.manualCapable) note += ' Manual driving needs Arduino firmware 3.1 on the Mega.';
   el('drvModeNote').textContent = note;
 
   const drivable = canDrive();
@@ -542,8 +542,8 @@ function renderDrive() {
   const alert = el('drvAlert');
   let msg = '', crit = false;
   if (on && st.mode === 'STOP') { msg = 'Emergency stop is latched. The wheels stay still until you choose Auto or Manual.'; crit = true; }
-  else if (on && st.blocked) { msg = 'Person ahead: forward is blocked. Turn on the spot or reverse.'; crit = true; }
-  else if (on && st.mode === 'MANUAL' && st.vision === 'offline') msg = `Vision (person detection) is offline. Speed is limited to ${st.slowPwm} PWM. Watch the path yourself.`;
+  else if (on && st.blocked) { msg = 'The camera says STOP (person in the stop zone, or vision not running). The robot will not move until it is clear.'; crit = true; }
+  else if (on && st.mode === 'MANUAL' && st.vision === 'offline') { msg = 'Vision (person detection) is not running: the robot will not move in Manual or Auto.'; crit = true; }
   else if (on && st.mode === 'MANUAL' && st.driver && st.driver !== myName() && (st.applied?.l || st.applied?.r)) msg = `${st.driver} is driving too. The last command wins.`;
   alert.hidden = !msg; alert.textContent = msg; alert.classList.toggle('crit', crit);
 
