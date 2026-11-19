@@ -187,6 +187,12 @@ fi
 usermod -aG video,audio "$TARGET_USER" || true
 ok "Kiosk autostart installed for $TARGET_USER"
 
+# Ubuntu Desktop (GNOME): auto-login, no lock screen / pop-ups, snap Chromium, everything at power-on
+if [ -f /etc/gdm3/custom.conf ] && [ -f "$SRC/ubuntu-autostart.sh" ]; then
+  say "Ubuntu: plug and play (auto-login, cart screen, no pop-ups)…"
+  bash "$SRC/ubuntu-autostart.sh" "$TARGET_USER" || warn "ubuntu-autostart.sh had a problem: run it again with sudo"
+fi
+
 if command -v raspi-config >/dev/null 2>&1; then
   say "Desktop auto-login + no screen blanking…"
   raspi-config nonint do_boot_behaviour B4 || warn "Set Desktop Autologin manually in raspi-config"

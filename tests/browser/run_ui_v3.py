@@ -36,6 +36,23 @@ def serve_site():
     return srv
 
 
+MQTT_STUB = (
+    "window.mqtt={connect(){const h={};const c={on(e,f){h[e]=f;if(e==='connect')setTimeout(f,20);return c},"
+    "subscribe(){},end(){}};window.__mqttEmit=(t,m)=>h.message&&h.message(t,{toString:()=>m});return c}}"
+)
+# Records which announcement plays, and "plays" it in 0.3 s (headless has no speaker).
+AUDIO_RECORDER = """
+window.__played = [];
+HTMLMediaElement.prototype.play = function () {
+  if (this.dataset && this.dataset.sound) {
+    window.__played.push(this.dataset.sound);
+    setTimeout(() => this.dispatchEvent(new Event('ended')), 300);
+  }
+  return Promise.resolve();
+};
+"""
+
+
 def routes(ctx, fb_base, user):
     def js(path):
         return lambda route: route.fulfill(content_type="application/javascript", body=open(path).read())
@@ -45,7 +62,7 @@ def routes(ctx, fb_base, user):
         ctx.route("**/unpkg.com/mqtt*/**", js(os.path.join(LIBS, "mqtt/dist/mqtt.min.js")))
         ctx.route("**/cdnjs.cloudflare.com/**/chart*", js(os.path.join(LIBS, "chart.js/dist/chart.umd.js")))
     else:
-        ctx.route("**/unpkg.com/**", lambda r: r.fulfill(content_type="application/javascript", body="window.mqtt={connect(){return{on(){},end(){},subscribe(){}}}}"))
+        ctx.route("**/unpkg.com/**", lambda r: r.fulfill(content_type="application/javascript", body=MQTT_STUB))
         ctx.route("**/cdnjs.cloudflare.com/**", lambda r: r.fulfill(content_type="application/javascript", body="window.Chart=function(){return{update(){},resize(){},destroy(){},data:{datasets:[{data:[]}],labels:[]},options:{}}}"))
     ctx.route("**/fonts.googleapis.com/**", lambda r: r.fulfill(content_type="text/css", body=""))
     ctx.route("**/fonts.gstatic.com/**", lambda r: r.abort())
@@ -75,9 +92,9 @@ def main():
             page.wait_for_function("document.getElementById('drvCtlPill').textContent.includes('online')", timeout=10000)
             check(True, "console: Controller online (state from medicart.py via Firebase)")
             check(page.locator("#drvModePill").inner_text() == "STOPPED", "console: robot starts STOPPED", page.locator("#drvModePill").inner_text())
-            check("3.1" in page.locator("#drvFw").inner_text(), "console: firmware 3.1 shown")
+            check("3.4" in page.locator("#drvFw").inner_text(), "console: firmware 3.4 shown")
             page.click("#modeAuto")
-            check(wait_until(lambda: rig.motors() == (38, 38), 6), "console Auto -> line following", rig.motors())
+            check(wait_until(lambda: rig.motors() == (50, 50), 6), "console Auto -> line following", rig.motors())
             page.click("#modeManual")
             page.wait_for_function("document.getElementById('drvPadPill').textContent === 'Ready'", timeout=8000)
             check(wait_until(lambda: rig.motors() == (0, 0), 3), "console Manual -> line following stops")
@@ -102,6 +119,7 @@ def main():
             # ── cart screen banner ──
             cctx = b.new_context(viewport={"width": 800, "height": 480}, device_scale_factor=dsf)
             routes(cctx, rig.base, '{uid:"uid-cart", email:"cart01@medicart.iub", displayName:"MediCart"}')
+            cctx.add_init_script(AUDIO_RECORDER)
             cart = cctx.new_page()
             cerrs = []
             cart.on("pageerror", lambda e: cerrs.append(str(e)))
@@ -114,6 +132,47 @@ def main():
             check(True, "cart screen: Emergency stop banner")
             if SHOTS:
                 cart.screenshot(path=os.path.join(SHOTS, "cart-estop.png"))
+
+            # ── voice announcements ──
+            played = lambda: cart.evaluate("window.__played.slice()")
+            page.click(".drive-announce [data-sound='0010']")
+            check(wait_until(lambda: "0010" in played(), 6), "Drive page 'Take your items' -> the cart plays 0010", played())
+            page.wait_for_function("document.getElementById('annNote').textContent.includes('Played on the cart')", timeout=6000)
+            check(True, "Drive page: shows 'Played on the cart ✓'")
+            check((rig.store.get("/carts/medicart-01/announce") or {}).get("sound") == "0010", "announce stored in Firebase")
+            check(page.locator(".drive-announce [data-sound]").count() == 1, "Drive page: only one announcement button (Take your items)")
+            page.click("#modeAuto")
+            check(wait_until(lambda: rig.motors() == (50, 50), 6), "Auto again (line following)")
+            time.sleep(16)                      # past the 15 s "don't repeat 0001" window
+            nb = len(played())
+            rig.person = "close"
+            check(wait_until(lambda: "0001" in played()[nb:], 8), "person in the path while driving -> 0001 'please step aside'", played()[nb:])
+            check(wait_until(lambda: "0002" in played()[nb:], 14), "still blocked 8 s later -> 0002 'keep the area clear'", played()[nb:])
+            rig.person = None
+            emit = lambda d: cart.evaluate("(m) => window.__mqttEmit('iub-medicart-591a7e01d2/01/sensors', m)", d)
+            import json as _json
+            no_finger = _json.dumps({"heartRate": 0, "spo2": 0, "fingerDetected": False, "state": "no_finger", "samplesCollected": 0})
+            check(wait_until(lambda: rig.motors() == (50, 50), 6), "path clear again: driving")
+            na = len(played())
+            emit(no_finger)
+            page.click("#estopBtn")              # the cart stops at the bed
+            stop_t = time.time()
+            ok = wait_until(lambda: (emit(no_finger) or True) and "0004" in played()[na:], 12)
+            check(ok, "cart drove then stood still 3 s, sensor online, no finger -> 0004 'place your finger' by itself",
+                  f"{played()[na:]} after {time.time() - stop_t:.1f}s")
+            time.sleep(4)
+            emit(no_finger)
+            check(played()[na:].count("0004") == 1, "0004 only once per stop")
+            n0 = len(played())
+            emit(_json.dumps({"heartRate": 0, "spo2": 0, "fingerDetected": True, "state": "measuring", "samplesCollected": 0}))
+            check(wait_until(lambda: "0005" in played()[n0:], 5), "finger placed (measuring) -> 0005 'keep your finger still'", played()[n0:])
+            emit(_json.dumps({"heartRate": 78, "spo2": 97, "fingerDetected": True, "state": "locked", "samplesCollected": 4}))
+            check(wait_until(lambda: played()[n0:].count("0006") == 1 and "0009" in played()[n0:], 12),
+                  "reading locked -> 0006 'thank you' then 0009 'consultation soon'", played()[n0:])
+            emit(_json.dumps({"heartRate": 78, "spo2": 97, "fingerDetected": True, "state": "locked", "samplesCollected": 4}))
+            time.sleep(1.0)
+            check(played()[n0:].count("0006") == 1, "no repeat while the finger stays on")
+            check(not cerrs, "cart screen: no page errors", cerrs[:2])
 
             # ── Rifat's Pi dashboard page ──
             dctx = b.new_context(viewport={"width": 1366, "height": 860}, device_scale_factor=dsf)
@@ -145,7 +204,7 @@ def main():
             dash.keyboard.press("Escape")
             check(wait_until(lambda: rig.status()["mode"] == "stopped", 3), "Pi dashboard: Esc = EMERGENCY STOP")
             dash.click("#bAuto")
-            check(wait_until(lambda: rig.motors() == (38, 38), 4), "Pi dashboard: Auto -> line following")
+            check(wait_until(lambda: rig.motors() == (50, 50), 4), "Pi dashboard: Auto -> line following")
             if SHOTS:
                 time.sleep(0.5)
                 dash.screenshot(path=os.path.join(SHOTS, "pi-dashboard-auto.png"))

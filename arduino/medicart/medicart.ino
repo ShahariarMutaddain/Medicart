@@ -1,328 +1,508 @@
 #include <Arduino.h>
-#include <EEPROM.h>   // saves the wheel fixes (FLIPL / FLIPR / SWAP)
 
 // ════════════════════════════════════════════════════════════════════════════
-//  MediCart firmware 3.1  ·  IUB Robotics Team  ·  Arduino Mega 2560  ·  115200 baud
+//  MediCart firmware 3.4  ·  IUB Robotics Team  ·  Arduino Mega 2560  ·  115200 baud
 //
-//  Line following = the LFR code that ran on the robot, unchanged:
-//    same pins, MOTOR_SPEED 38, SLIDE_BRAKE_SPEED 15, inverted IR reading (!digitalRead),
-//    same pattern table, same glitch filter (2 cycles), same 50 ms cycle, same Serial text.
-//  Around it, the MediCart architecture: the Pi decides WHEN the cart may move.
+//  Line following AND the Serial Monitor manual mode = the LFR code that ran on the robot,
+//  unchanged: same pins, speeds, gains, position filter, slew rate, lost-line search,
+//  p / w a s d x keys, and its SMOOTH stop (stopMotors() ramps down at 300 PWM/s).
+//  Its functions are copied as they were (marked "LFR"). Every stop uses that same
+//  smooth stopMotors(): Pi STOP (person / emergency), the 750 ms timeout, x, p, end of l.
 //
-//  Pi commands (protocol unchanged from firmware 3.0):
+//  [3.4] Reverse turning from the Nov 11 LFR code, added on top (REVERSE_TURN_ASSIST):
+//    only S2 sees the line -> slide left : left wheel BACK 15 (SLIDE_BRAKE_SPEED), right wheel forward 50
+//    only S1 sees the line -> sharp left : left wheel BACK 50, right wheel forward 50 (pivot)
+//    only S4 / only S5     -> the same to the right
+//  Everything else is today's code unchanged, and every change still goes through driveSmoothly(),
+//  so the turns ramp in and out smoothly. REVERSE_TURN_ASSIST = false gives exactly today's code.
+//  Around it, the MediCart architecture: the Pi decides WHEN the cart may line-follow.
+//
+//  Pi commands (protocol unchanged):
 //    SAFE / MODE:AUTO      path clear -> line following      STOP   stop now (person / emergency)
 //    MODE:MANUAL           manual mode                       DRIVE:<left>,<right>  wheel PWM (max 180)
 //    QR:1..10 / RESET_QR   bed output pins                   No command for 750 ms -> motors stop
 //
 //  Serial Monitor (115200, any line ending):
-//    l or 1      line following WITHOUT the Pi for 60 s (type again to continue)   x  STOP
-//    w a s d     forward / pivot left / back / pivot right, 1 s per press (speed 38)
-//    + / -       key speed            v  live view on/off       i  sensors once
-//    t           finger test: wheels lifted, cover sensors, wheels do what the LFR would do
-//    TESTL / TESTR   spin one wheel    FLIPL / FLIPR  reverse a wheel   SWAP  swap sides
-//    SETTINGS    show everything       FACTORY        clear the wheel fixes
-//    STAT        status line (used by the Pi)          VIEW 0 / VIEW 1
-//  There is NO camera brake during l / w a s d / t. Keep someone next to the robot.
+//    p           manual mode on/off (as in the LFR code)    w a s d  drive (latched)   x or space  stop
+//    l           line following WITHOUT the Pi for 60 s (l again = 60 s more; x stops)
+//    v           live view on/off     i  sensors once     h  help     STAT  status line (used by the Pi)
+//  There is NO camera brake in p-manual or the l run. Keep someone next to the robot.
 // ════════════════════════════════════════════════════════════════════════════
 
 // ════════════════════════════════════════════════════════════════════════════
-//  FROM THE LFR CODE THAT RAN ON THE ROBOT (values unchanged)
+//  LFR CODE (values unchanged)
 // ════════════════════════════════════════════════════════════════════════════
 
-// Motor Control Pins (Pins 2, 3, 4, 5 handle both PWM speed and direction)
-const int MOTOR_L_PIN1 = 2; // Left Motor Forward / PWM
-const int MOTOR_L_PIN2 = 3; // Left Motor Backward / PWM
-const int MOTOR_R_PIN1 = 4; // Right Motor Forward / PWM
-const int MOTOR_R_PIN2 = 5; // Right Motor Backward / PWM
+// Motor driver pins
+const uint8_t MOTOR_L_PIN1 = 2;
+const uint8_t MOTOR_L_PIN2 = 3;
+const uint8_t MOTOR_R_PIN1 = 4;
+const uint8_t MOTOR_R_PIN2 = 5;
 
-const int IR_PINS[5] = {A8, A9, A10, A11, A12};  // S1 (leftmost) to S5 (rightmost)
-const int BUZZER_PIN = 25;
+// IR sensors: far left, left, center, right, far right
+const uint8_t IR_PINS[5] = {A8, A9, A10, A11, A12};
 
-// Speed: 15% speed -> PWM 38 out of 255
-const int MOTOR_SPEED = 38;
+// true for a black line on a white surface; false for a white line on black
+const bool BLACK_LINE = true;
 
+// Line-following tuning
+const int LINE_BASE_SPEED = 50;
+const int LINE_STEERING_GAIN = 20;
+const int LINE_MAX_STEERING = 40;
+const int MAX_MOTOR_SPEED = 50;
+const int SEARCH_SPEED = 50;
+const int MANUAL_SPEED = 50;
+const int MOTOR_SLEW_RATE_PER_SECOND = 300;
+const unsigned long POSITION_FILTER_MS = 25;
+const unsigned long LOST_LINE_SEARCH_MS = 1500;
+
+int lastLineSide = 0; // -1 = left, +1 = right
+int currentLeftSpeed = 0;
+int currentRightSpeed = 0;
+float filteredPosition = 0.0f;
+bool positionFilterInitialized = false;
+bool lineLost = false;
+bool manualMode = false;
+int manualLeftTarget = 0;
+int manualRightTarget = 0;
+unsigned long lostLineStartMs = 0;
+unsigned long lastMotorUpdateMs = 0;
+unsigned long motorSlewRemainder = 0;
+unsigned long lastPositionUpdateMs = 0;
+
+// ════════════════════════════════════════════════════════════════════════════
+//  [3.4] REVERSE TURNING (from the Nov 11 LFR code)
+// ════════════════════════════════════════════════════════════════════════════
+
+const bool REVERSE_TURN_ASSIST = true;           // false = today's LFR code exactly
 // Active slide brake speed: inside wheel spins slightly backward (PWM 15) for ultra-hard cornering on both sides
 const int SLIDE_BRAKE_SPEED = 15;
-
-// Variables to track current PWM values for Serial printing
-int currentLeftPWM = 0;
-int currentRightPWM = 0;
-
-// Anti-glitch counter for temporary line dropouts
-int offLineCount = 0;
-const int GLITCH_THRESHOLD = 2; // Must stay off-line for 2 cycles before stopping
-
-// The original loop ended with delay(50). Here the same 50 ms cycle runs without blocking,
-// so Pi commands (STOP!) are still read instantly.
-const unsigned long LFR_CYCLE_MS = 50;
 
 // ════════════════════════════════════════════════════════════════════════════
 //  MEDICART ARCHITECTURE
 // ════════════════════════════════════════════════════════════════════════════
 
 const long SERIAL_BAUD = 115200;                 // the Pi (medicart.py) talks at 115200
+const int BUZZER_PIN = 25;
 const int QR_OUTPUT_PINS[10] = {6, 7, 8, 9, 10, 11, 12, 13, 22, 23};
 // QR 1 -> pin 6,  QR 2 -> pin 7,  QR 3 -> pin 8,  QR 4 -> pin 9,  QR 5 -> pin 10
 // QR 6 -> pin 11, QR 7 -> pin 12, QR 8 -> pin 13, QR 9 -> pin 22, QR 10 -> pin 23
 
 const unsigned long COMMAND_TIMEOUT_MS = 750;    // no Pi command for 750 ms -> stop
-const int MAX_MANUAL_SPEED = 180;                // DRIVE:l,r is capped here
-
-const unsigned long VIEW_EVERY_MS = 200;         // live view while NOT line following
+const int MAX_PI_SPEED = 180;                    // DRIVE:l,r from the Pi is capped here
+const unsigned long VIEW_EVERY_MS = 200;         // live view: 5 lines a second
 const bool VIEW_ON_AT_BOOT = true;               // the Pi sends "VIEW 0" when it connects
-const unsigned long KEY_HOLD_MS = 1000;          // one w/a/s/d press drives this long
-const int KEY_SPEED_START = MOTOR_SPEED;         // keys use the LFR speed (38)
-const int KEY_SPEED_STEP = 10;
 const unsigned long LFR_TEST_MS = 60000;         // "l" without the Pi: 60 s per press
-const unsigned long FINGER_TEST_MS = 120000;     // "t" finger test: 2 min
-
-const bool DEBUG_SAFETY = true;                  // "DBG ..." lines for the Pi log
-const unsigned long DEBUG_MIN_INTERVAL_MS = 50;
+const unsigned long DBG_MOTOR_EVERY_MS = 500;    // "DBG motor=" lines for the Pi log
 const unsigned long LINE_LOST_BEEP_PERIOD_MS = 500;   // line lost: 100 ms beep every 500 ms
 const unsigned long LINE_LOST_BEEP_ON_MS = 100;
 
-// ---- state ----
+enum ControlMode { AUTO_MODE, MANUAL_MODE };
+ControlMode controlMode = AUTO_MODE;             // what the Pi asked for
 bool obstacleDetected = true;                    // starts stopped until the Pi says SAFE
+int piLeftTarget = 0;
+int piRightTarget = 0;
+unsigned long lastSafetyHeartbeatMs = 0;
+unsigned long lfrTestUntilMs = 0;
+bool wasFollowing = false;
 bool qrOutputs[10] = {false};
 String serialBuffer = "";
 unsigned long lastCharMs = 0;
-unsigned long lastSafetyHeartbeatMs = 0;
-enum ControlMode { AUTO_MODE, MANUAL_MODE };
-ControlMode controlMode = AUTO_MODE;
-int manualLeftSpeed = 0;
-int manualRightSpeed = 0;
-int currentLeftSpeed = 0;                        // signed, for STAT / DBG (+ forward, - backward)
-int currentRightSpeed = 0;
-
-unsigned long lastLfrCycleMs = 0;
-bool lfrDueNow = true;
-bool lineLost = false;                           // confirmed off-line (the LFR stopped)
-bool junction = false;                           // 1 1 1 1 1
-uint8_t currentPattern = 0;                      // bit 4 = S1 ... bit 0 = S5
-
 bool viewOn = VIEW_ON_AT_BOOT;
 unsigned long lastViewMs = 0;
-unsigned long keyUntilMs = 0;
-unsigned long lfrTestUntilMs = 0;
-int keySpeed = KEY_SPEED_START;
-bool fingerTest = false;
-unsigned long fingerUntilMs = 0;
-byte fingerBase = 0;
-bool flipA = false, flipB = false, swapSides = false;   // A = pins 2/3, B = pins 4/5
-const byte FIX_MAGIC = 0xB1;                     // new value: settings saved by older firmware are ignored
-const int EE_FIX = 32;
-
 bool prevObstacleDebug = true;
 bool prevLineLostDebug = false;
-int prevLeftSpeedDebug = 1000;
-int prevRightSpeedDebug = 1000;
-unsigned long lastDebugPrintMs = 0;
+unsigned long lastDbgMotorMs = 0;
+int prevLeftDbg = 1000, prevRightDbg = 1000;
 
 bool timeBefore(unsigned long until)             // true while millis() < until (rollover-safe)
 {
     return until != 0 && (long)(millis() - until) < 0;
 }
-bool localHold()                                 // a Serial Monitor test is driving: no Pi timeout
-{
-    return timeBefore(keyUntilMs) || timeBefore(lfrTestUntilMs) || fingerTest;
-}
 
 // ════════════════════════════════════════════════════════════════════════════
-//  MOTORS (the original functions)
+//  LFR CODE: motors, sensors, filter (copied as they were)
 // ════════════════════════════════════════════════════════════════════════════
 
-void setMotorPWM(int leftForward, int leftBackward, int rightForward, int rightBackward) {
-  // Track active speed for Serial display
-  currentLeftPWM = (leftForward > 0) ? leftForward : leftBackward;
-  currentRightPWM = (rightForward > 0) ? rightForward : rightBackward;
-  currentLeftSpeed = leftForward - leftBackward;
-  currentRightSpeed = rightForward - rightBackward;
-
-  // Wheel fixes (FLIPL / FLIPR / SWAP). All OFF by default = exactly the original wiring.
-  int lf = leftForward, lb = leftBackward, rf = rightForward, rb = rightBackward, t;
-  if (swapSides) { t = lf; lf = rf; rf = t; t = lb; lb = rb; rb = t; }
-  if (flipA) { t = lf; lf = lb; lb = t; }
-  if (flipB) { t = rf; rf = rb; rb = t; }
-
-  analogWrite(MOTOR_L_PIN1, lf);
-  analogWrite(MOTOR_L_PIN2, lb);
-  analogWrite(MOTOR_R_PIN1, rf);
-  analogWrite(MOTOR_R_PIN2, rb);
-}
-
-void moveForward() {
-  setMotorPWM(MOTOR_SPEED, 0, MOTOR_SPEED, 0);
-}
-
-void slideLeft() {
-  // Left wheel actively brakes/reverses slightly, right wheel pushes forward
-  setMotorPWM(0, SLIDE_BRAKE_SPEED, MOTOR_SPEED, 0);
-}
-
-void turnLeft() {
-  setMotorPWM(0, MOTOR_SPEED, MOTOR_SPEED, 0); // Sharp pivot turn left
-}
-
-void slideRight() {
-  // Right wheel actively brakes/reverses slightly, left wheel pushes forward
-  setMotorPWM(MOTOR_SPEED, 0, 0, SLIDE_BRAKE_SPEED);
-}
-
-void turnRight() {
-  setMotorPWM(MOTOR_SPEED, 0, 0, MOTOR_SPEED); // Sharp pivot turn right
-}
-
-void stopMotors() {
-  setMotorPWM(0, 0, 0, 0);
-}
-
-// Signed wheel speeds (manual driving from the Pi, w a s d). + forward, - backward.
-void drive(int left, int right)
+void setLeftMotor(int speed)
 {
-    setMotorPWM(left > 0 ? left : 0, left < 0 ? -left : 0, right > 0 ? right : 0, right < 0 ? -right : 0);
-}
-
-// ════════════════════════════════════════════════════════════════════════════
-//  LINE FOLLOWING (the original loop body, one 50 ms cycle)
-// ════════════════════════════════════════════════════════════════════════════
-
-void readLine(int &s1, int &s2, int &s3, int &s4, int &s5)
-{
-  // Inverted readings: '!' flips 0 to 1 and 1 to 0
-  s1 = !digitalRead(IR_PINS[0]); // Leftmost
-  s2 = !digitalRead(IR_PINS[1]); // Mid-Left
-  s3 = !digitalRead(IR_PINS[2]); // Center
-  s4 = !digitalRead(IR_PINS[3]); // Mid-Right
-  s5 = !digitalRead(IR_PINS[4]); // Rightmost
-}
-
-void printSensorLine(int s1, int s2, int s3, int s4, int s5)
-{
-  // Print sensors, current PWM values, and status to Serial Monitor
-  Serial.print("S1: "); Serial.print(s1);
-  Serial.print("\tS2: "); Serial.print(s2);
-  Serial.print("\tS3: "); Serial.print(s3);
-  Serial.print("\tS4: "); Serial.print(s4);
-  Serial.print("\tS5: "); Serial.print(s5);
-  Serial.print("\t| PWM_L: "); Serial.print(currentLeftPWM);
-  Serial.print("\tPWM_R: "); Serial.print(currentRightPWM);
-  Serial.println();
-}
-
-// The original decision table. Drives the wheels and returns the original Serial text.
-const char *lfrDecide(int s1, int s2, int s3, int s4, int s5)
-{
-  currentPattern = (uint8_t)((s1 << 4) | (s2 << 3) | (s3 << 2) | (s4 << 1) | s5);
-  junction = false;
-  lineLost = false;
-
-  // Check if all sensors see white (off line / potential glitch)
-  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
-    offLineCount++;
-    if (offLineCount >= GLITCH_THRESHOLD) {
-      stopMotors();
-      lineLost = true;
-      return "stop (confirmed off-line)";
-    } else {
-      // Ignore the momentary glitch and maintain forward momentum briefly
-      moveForward();
-      return "forwrd (glitch ignored)";
+    if (speed > 0)
+    {
+        analogWrite(MOTOR_L_PIN1, speed);
+        analogWrite(MOTOR_L_PIN2, 0);
     }
-  }
-
-  // Reset glitch counter as soon as a valid signal is detected
-  offLineCount = 0;
-
-  // State matching logic
-  if (s1 == 0 && s2 == 0 && s3 == 1 && s4 == 0 && s5 == 0) {
-    moveForward();
-    return "forwrd";
-  }
-  else if (s1 == 0 && s2 == 1 && s3 == 0 && s4 == 0 && s5 == 0) {
-    slideLeft();
-    return "slide left (active reverse brake)";
-  }
-  else if (s1 == 1 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
-    turnLeft();
-    return "left (sharp)";
-  }
-  else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 1 && s5 == 0) {
-    slideRight();
-    return "slide right (active reverse brake)";
-  }
-  else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 1) {
-    turnRight();
-    return "right (sharp)";
-  }
-  else if (s1 == 1 && s2 == 1 && s3 == 1 && s4 == 1 && s5 == 1) {
-    stopMotors();
-    junction = true;
-    return "stop (line junction)";
-  }
-  else {
-    moveForward();
-    return "forwrd (default)";
-  }
+    else if (speed < 0)
+    {
+        analogWrite(MOTOR_L_PIN1, 0);
+        analogWrite(MOTOR_L_PIN2, -speed);
+    }
+    else
+    {
+        analogWrite(MOTOR_L_PIN1, 0);
+        analogWrite(MOTOR_L_PIN2, 0);
+    }
 }
 
-void resetLineState()
+void setRightMotor(int speed)
 {
-    offLineCount = 0;
-    lineLost = false;
-    junction = false;
-    lfrDueNow = true;                    // the next line-following cycle runs at once
+    if (speed > 0)
+    {
+        analogWrite(MOTOR_R_PIN1, speed);
+        analogWrite(MOTOR_R_PIN2, 0);
+    }
+    else if (speed < 0)
+    {
+        analogWrite(MOTOR_R_PIN1, 0);
+        analogWrite(MOTOR_R_PIN2, -speed);
+    }
+    else
+    {
+        analogWrite(MOTOR_R_PIN1, 0);
+        analogWrite(MOTOR_R_PIN2, 0);
+    }
 }
 
-// One cycle every 50 ms, exactly like the original loop (but without blocking).
-void lineFollowing()
+void driveSmoothly(int leftTarget, int rightTarget);
+
+void stopMotors()
+{
+    driveSmoothly(0, 0);
+}
+
+int approachSpeed(int current, int target, unsigned long maxChange)
+{
+    int step = (int)maxChange;
+    if (target > current)
+    {
+        return target - current > step ? current + step : target;
+    }
+    if (target < current)
+    {
+        return current - target > step ? current - step : target;
+    }
+    return current;
+}
+
+void driveSmoothly(int leftTarget, int rightTarget)
 {
     unsigned long now = millis();
-    if (!lfrDueNow && now - lastLfrCycleMs < LFR_CYCLE_MS)
-    {
-        return;                          // between cycles the wheels keep the last command
-    }
-    lfrDueNow = false;
-    lastLfrCycleMs = now;
+    unsigned long elapsed = now - lastMotorUpdateMs;
+    lastMotorUpdateMs = now;
 
-    int s1, s2, s3, s4, s5;
-    readLine(s1, s2, s3, s4, s5);
-    const char *what = lfrDecide(s1, s2, s3, s4, s5);
-    if (viewOn)                          // same Serial output as the original code
+    motorSlewRemainder += (unsigned long)MOTOR_SLEW_RATE_PER_SECOND * elapsed;
+    unsigned long maxChange = motorSlewRemainder / 1000;
+    motorSlewRemainder %= 1000;
+
+    if (maxChange > 0)
     {
-        Serial.println(what);
-        printSensorLine(s1, s2, s3, s4, s5);
+        currentLeftSpeed = approachSpeed(currentLeftSpeed, leftTarget, maxChange);
+        currentRightSpeed = approachSpeed(currentRightSpeed, rightTarget, maxChange);
+    }
+
+    setLeftMotor(currentLeftSpeed);
+    setRightMotor(currentRightSpeed);
+}
+
+bool sensorSeesLine(uint8_t pin)
+{
+    int reading = digitalRead(pin);
+    return BLACK_LINE ? reading == LOW : reading == HIGH;
+}
+
+bool readLinePosition(float &position)
+{
+    const float sensorPositions[5] = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
+    float positionSum = 0.0f;
+    int activeSensors = 0;
+
+    for (uint8_t i = 0; i < 5; i++)
+    {
+        if (sensorSeesLine(IR_PINS[i]))
+        {
+            positionSum += sensorPositions[i];
+            activeSensors++;
+        }
+    }
+
+    if (activeSensors == 0)
+    {
+        return false;
+    }
+
+    position = positionSum / activeSensors;
+    return true;
+}
+
+float smoothPosition(float position)
+{
+    unsigned long now = millis();
+    unsigned long elapsed = now - lastPositionUpdateMs;
+    lastPositionUpdateMs = now;
+
+    if (!positionFilterInitialized)
+    {
+        filteredPosition = position;
+        positionFilterInitialized = true;
+    }
+    else
+    {
+        float alpha = (float)elapsed / (POSITION_FILTER_MS + elapsed);
+        filteredPosition += alpha * (position - filteredPosition);
+    }
+    return filteredPosition;
+}
+
+// The LFR code's reset when line following starts again (its 'p' manual -> auto branch)
+void resetLineFollowing()
+{
+    lineLost = false;
+    lastLineSide = 0;
+    positionFilterInitialized = false;
+    lastPositionUpdateMs = millis();
+}
+
+// [3.4] Nov 11 reverse turning: when only one side sensor sees the line, the inner wheel
+// turns backward and the outer wheel drives forward at full line speed.
+void reverseTurnAssist(int &leftTarget, int &rightTarget)
+{
+    if (!REVERSE_TURN_ASSIST)
+    {
+        return;
+    }
+    uint8_t pattern = 0;
+    for (uint8_t i = 0; i < 5; i++)
+    {
+        pattern = (pattern << 1) | (sensorSeesLine(IR_PINS[i]) ? 1 : 0);   // bit 4 = S1 ... bit 0 = S5
+    }
+    switch (pattern)
+    {
+        case 0b01000:                                      // slide left
+            leftTarget = -SLIDE_BRAKE_SPEED;
+            rightTarget = MAX_MOTOR_SPEED;
+            break;
+        case 0b10000:                                      // sharp left (pivot)
+            leftTarget = -MAX_MOTOR_SPEED;
+            rightTarget = MAX_MOTOR_SPEED;
+            break;
+        case 0b00010:                                      // slide right
+            leftTarget = MAX_MOTOR_SPEED;
+            rightTarget = -SLIDE_BRAKE_SPEED;
+            break;
+        case 0b00001:                                      // sharp right (pivot)
+            leftTarget = MAX_MOTOR_SPEED;
+            rightTarget = -MAX_MOTOR_SPEED;
+            break;
+    }
+}
+
+// LFR code: one pass of its loop() line following (copied as it was, plus the [3.4] line)
+void lineFollowStep()
+{
+    float position;
+    unsigned long now = millis();
+
+    if (!readLinePosition(position))
+    {
+        if (!lineLost)
+        {
+            lineLost = true;
+            lostLineStartMs = now;
+        }
+
+        if (lastLineSide != 0 && now - lostLineStartMs < LOST_LINE_SEARCH_MS)
+        {
+            if (lastLineSide < 0)
+            {
+                driveSmoothly(-SEARCH_SPEED, SEARCH_SPEED);
+            }
+            else
+            {
+                driveSmoothly(SEARCH_SPEED, -SEARCH_SPEED);
+            }
+        }
+        else
+        {
+            stopMotors();
+        }
+        return;
+    }
+
+    lineLost = false;
+    position = smoothPosition(position);
+
+    if (position < -0.1f)
+    {
+        lastLineSide = -1;
+    }
+    else if (position > 0.1f)
+    {
+        lastLineSide = 1;
+    }
+
+    int steering = (int)(position * LINE_STEERING_GAIN);
+    steering = constrain(steering, -LINE_MAX_STEERING, LINE_MAX_STEERING);
+
+    int baseSpeed = LINE_BASE_SPEED - (int)(abs(position) * 12.0f);
+    int leftTarget = constrain(baseSpeed + steering, 0, MAX_MOTOR_SPEED);
+    int rightTarget = constrain(baseSpeed - steering, 0, MAX_MOTOR_SPEED);
+    reverseTurnAssist(leftTarget, rightTarget);        // [3.4] Nov 11 reverse turning
+    driveSmoothly(leftTarget, rightTarget);
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  SERIAL MONITOR KEYS (the LFR code's p / w a s d x keys, plus l v i h)
+// ════════════════════════════════════════════════════════════════════════════
+
+void printSensors()
+{
+    Serial.print("S1-S5 ");
+    for (uint8_t i = 0; i < 5; i++) Serial.print(sensorSeesLine(IR_PINS[i]) ? '1' : '0');
+}
+
+void printHelp()
+{
+    Serial.println("== MediCart 3.4 Serial Monitor ==");
+    Serial.println(" p manual on/off   w a s d drive   x / space stop   (the LFR code's keys)");
+    Serial.println(" l line following 60 s without the Pi   v live view on/off   i sensors   h help   STAT");
+    Serial.println(" (no camera brake in p-manual or the l run - keep someone next to the robot)");
+}
+
+void handleKey(char key)
+{
+    if (key >= 'A' && key <= 'Z')
+    {
+        key = key - 'A' + 'a';
+    }
+
+    if (key == 'p')                                   // LFR code: manual on/off
+    {
+        lfrTestUntilMs = 0;
+        manualMode = !manualMode;
+        manualLeftTarget = 0;
+        manualRightTarget = 0;
+        stopMotors();
+
+        if (!manualMode)
+        {
+            lineLost = false;
+            lastLineSide = 0;
+            positionFilterInitialized = false;
+            lastPositionUpdateMs = millis();
+        }
+        Serial.println(manualMode ? "MANUAL on (w a s d, x stop, p off)" : "MANUAL off");
+        return;
+    }
+    if (key == 'l')
+    {
+        manualMode = false;
+        lfrTestUntilMs = millis() + LFR_TEST_MS;
+        if (lfrTestUntilMs == 0) lfrTestUntilMs = 1;
+        Serial.println("LFR 60 s: line following without the Pi (x = stop, l again = 60 s more)");
+        return;
+    }
+    if (key == 'v') { viewOn = !viewOn; Serial.println(viewOn ? "VIEW on (v = off)" : "VIEW off (v = on)"); return; }
+    if (key == 'i') { printSensors(); Serial.println("   (1 = line)"); return; }
+    if (key == 'h' || key == '?') { printHelp(); return; }
+    if ((key == 'x' || key == ' ') && !manualMode && lfrTestUntilMs)
+    {
+        lfrTestUntilMs = 0;
+        stopMotors();
+        Serial.println("LFR stopped");
+        return;
+    }
+
+    if (!manualMode)
+    {
+        return;
+    }
+
+    switch (key)                                      // LFR code: manual keys
+    {
+        case 'w':
+            manualLeftTarget = MANUAL_SPEED;
+            manualRightTarget = MANUAL_SPEED;
+            break;
+        case 'a':
+            manualLeftTarget = 0;
+            manualRightTarget = MANUAL_SPEED;
+            break;
+        case 'd':
+            manualLeftTarget = MANUAL_SPEED;
+            manualRightTarget = 0;
+            break;
+        case 's':
+            manualLeftTarget = -MANUAL_SPEED;
+            manualRightTarget = -MANUAL_SPEED;
+            break;
+        case 'x':
+        case ' ':
+            manualLeftTarget = 0;
+            manualRightTarget = 0;
+            stopMotors();
+            break;
     }
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  BUZZER, DEBUG, QR
+//  STATUS OUTPUT
 // ════════════════════════════════════════════════════════════════════════════
 
-void buzzerControl()
+const char *modeName()
 {
-    bool timedOut = (millis() - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS && !localHold();
-    if (timedOut)
-    {
-        obstacleDetected = true;
-    }
-    digitalWrite(BUZZER_PIN, (obstacleDetected || timedOut) ? HIGH : LOW);   // safety stop: solid tone
+    if (manualMode) return "KEYS-MANUAL";
+    if (timeBefore(lfrTestUntilMs)) return "LFR-TEST";
+    if (controlMode == MANUAL_MODE) return "MANUAL";
+    return "AUTO";
 }
 
-void lineLostBeep()
+void printPattern()
 {
-    if (lineLost && !obstacleDetected)
-    {
-        bool beepOn = (millis() % LINE_LOST_BEEP_PERIOD_MS) < LINE_LOST_BEEP_ON_MS;
-        digitalWrite(BUZZER_PIN, beepOn ? HIGH : LOW);
-    }
+    for (uint8_t i = 0; i < 5; i++) Serial.print(sensorSeesLine(IR_PINS[i]) ? '1' : '0');
+}
+
+void printView()
+{
+    unsigned long hb = millis() - lastSafetyHeartbeatMs;
+    Serial.print("VIEW ");
+    printSensors();
+    Serial.print(" | ");
+    Serial.print(modeName());
+    Serial.print(manualMode || timeBefore(lfrTestUntilMs) ? "" : (obstacleDetected ? " STOPPED" : " GO"));
+    Serial.print(" | L ");
+    Serial.print(currentLeftSpeed);
+    Serial.print(" R ");
+    Serial.print(currentRightSpeed);
+    Serial.print(" | pos ");
+    Serial.print(filteredPosition, 2);
+    Serial.print(" | hb ");
+    Serial.print(hb > 99999UL ? 99999UL : hb);
+    Serial.print("ms");
+    if (lineLost) Serial.print(" | LINE LOST");
+    Serial.println();
+}
+
+void printStat()
+{
+    Serial.print("STAT mode=");
+    Serial.print(controlMode == MANUAL_MODE ? "MANUAL" : "AUTO");
+    Serial.print(" obstacle=");
+    Serial.print((int)obstacleDetected);
+    Serial.print(" hbAge=");
+    Serial.print(millis() - lastSafetyHeartbeatMs);
+    Serial.print(" motor=");
+    Serial.print(currentLeftSpeed);
+    Serial.print(',');
+    Serial.print(currentRightSpeed);
+    Serial.print(" line=");
+    printPattern();
+    Serial.print(" lost=");
+    Serial.print((int)lineLost);
+    Serial.println(" fw=3.4");
 }
 
 void debugReport()
 {
-    if (!DEBUG_SAFETY) return;
     unsigned long now = millis();
-    if (now - lastDebugPrintMs < DEBUG_MIN_INTERVAL_MS) return;
-
     if (obstacleDetected != prevObstacleDebug)
     {
         Serial.print("DBG obstacle=");
@@ -330,25 +510,43 @@ void debugReport()
         Serial.print(" hbAge=");
         Serial.println(now - lastSafetyHeartbeatMs);
         prevObstacleDebug = obstacleDetected;
-        lastDebugPrintMs = now;
     }
     else if (lineLost != prevLineLostDebug)
     {
         Serial.print("DBG lineLost=");
         Serial.println((int)lineLost);
         prevLineLostDebug = lineLost;
-        lastDebugPrintMs = now;
     }
-    else if (currentLeftSpeed != prevLeftSpeedDebug || currentRightSpeed != prevRightSpeedDebug)
+    else if ((currentLeftSpeed != prevLeftDbg || currentRightSpeed != prevRightDbg) && now - lastDbgMotorMs >= DBG_MOTOR_EVERY_MS)
     {
         Serial.print("DBG motor=");
         Serial.print(currentLeftSpeed);
         Serial.print(',');
         Serial.println(currentRightSpeed);
-        prevLeftSpeedDebug = currentLeftSpeed;
-        prevRightSpeedDebug = currentRightSpeed;
-        lastDebugPrintMs = now;
+        prevLeftDbg = currentLeftSpeed;
+        prevRightDbg = currentRightSpeed;
+        lastDbgMotorMs = now;
     }
+}
+
+// ════════════════════════════════════════════════════════════════════════════
+//  BUZZER, QR
+// ════════════════════════════════════════════════════════════════════════════
+
+void buzzerControl(bool benchDriving)
+{
+    if (benchDriving)
+    {
+        digitalWrite(BUZZER_PIN, LOW);
+        return;
+    }
+    if (lineLost && !obstacleDetected)                // line lost: short beeps
+    {
+        bool beepOn = (millis() % LINE_LOST_BEEP_PERIOD_MS) < LINE_LOST_BEEP_ON_MS;
+        digitalWrite(BUZZER_PIN, beepOn ? HIGH : LOW);
+        return;
+    }
+    digitalWrite(BUZZER_PIN, obstacleDetected ? HIGH : LOW);   // safety stop / no Pi: solid tone
 }
 
 void updateQROutputs()
@@ -368,286 +566,32 @@ void resetQROutputs()
 }
 
 // ════════════════════════════════════════════════════════════════════════════
-//  SERIAL MONITOR TOOLS
-// ════════════════════════════════════════════════════════════════════════════
-
-void saveFixes()
-{
-    EEPROM.update(EE_FIX, FIX_MAGIC);
-    EEPROM.update(EE_FIX + 1, (byte)((flipA ? 1 : 0) | (flipB ? 2 : 0) | (swapSides ? 4 : 0)));
-}
-
-void loadFixes()
-{
-    if (EEPROM.read(EE_FIX) == FIX_MAGIC)
-    {
-        byte f = EEPROM.read(EE_FIX + 1);
-        flipA = f & 1; flipB = f & 2; swapSides = f & 4;
-    }
-}
-
-const char *modeName()
-{
-    if (fingerTest) return "FINGER-TEST";
-    if (timeBefore(lfrTestUntilMs)) return "LFR-TEST";
-    if (timeBefore(keyUntilMs)) return "KEYS";
-    if (controlMode == MANUAL_MODE) return "MANUAL";
-    return "AUTO";
-}
-
-void printPattern()
-{
-    int s1, s2, s3, s4, s5;
-    readLine(s1, s2, s3, s4, s5);
-    Serial.print(s1); Serial.print(s2); Serial.print(s3); Serial.print(s4); Serial.print(s5);
-}
-
-// Live view while the line follower is NOT running (it prints its own lines when it runs)
-void printView()
-{
-    int s1, s2, s3, s4, s5;
-    readLine(s1, s2, s3, s4, s5);
-    unsigned long hb = millis() - lastSafetyHeartbeatMs;
-    Serial.print("VIEW ");
-    Serial.print(modeName());
-    Serial.print(obstacleDetected ? " STOPPED" : " GO");
-    Serial.print(" hb ");
-    Serial.print(hb > 99999UL ? 99999UL : hb);
-    Serial.print("ms\t");
-    printSensorLine(s1, s2, s3, s4, s5);
-}
-
-void printStat()
-{
-    Serial.print("STAT mode=");
-    Serial.print(controlMode == MANUAL_MODE ? "MANUAL" : "AUTO");
-    Serial.print(" obstacle=");
-    Serial.print((int)obstacleDetected);
-    Serial.print(" hbAge=");
-    Serial.print(millis() - lastSafetyHeartbeatMs);
-    Serial.print(" motor=");
-    Serial.print(currentLeftSpeed);
-    Serial.print(',');
-    Serial.print(currentRightSpeed);
-    Serial.print(" line=");
-    printPattern();
-    Serial.print(" lost=");
-    Serial.print((int)lineLost);
-    Serial.println(" fw=3.1");
-}
-
-void printSettings()
-{
-    Serial.print("SETTINGS LFR speed ");
-    Serial.print(MOTOR_SPEED);
-    Serial.print(", slide brake ");
-    Serial.print(SLIDE_BRAKE_SPEED);
-    Serial.print(", glitch ");
-    Serial.print(GLITCH_THRESHOLD);
-    Serial.print(" cycles of ");
-    Serial.print(LFR_CYCLE_MS);
-    Serial.print(" ms | left wheel=pins ");
-    Serial.print(swapSides ? "4/5" : "2/3");
-    Serial.print((swapSides ? flipB : flipA) ? " reversed" : " normal");
-    Serial.print(", right wheel=pins ");
-    Serial.print(swapSides ? "2/3" : "4/5");
-    Serial.print((swapSides ? flipA : flipB) ? " reversed" : " normal");
-    Serial.print(" | key speed ");
-    Serial.println(keySpeed);
-}
-
-void printHelp()
-{
-    Serial.println("== MediCart 3.1 Serial Monitor ==");
-    Serial.println(" l/1 line following 60 s (no Pi)   x STOP   w a s d drive 1 s   + - key speed");
-    Serial.println(" v live view on/off   i sensors once   t finger test (wheels lifted)");
-    Serial.println(" TESTL TESTR FLIPL FLIPR SWAP   SETTINGS   FACTORY   STAT   h help");
-    Serial.println(" (no camera brake during l / keys / t - keep someone next to the robot)");
-}
-
-void stopEverything(const char *why)
-{
-    keyUntilMs = 0;
-    lfrTestUntilMs = 0;
-    fingerTest = false;
-    manualLeftSpeed = 0;
-    manualRightSpeed = 0;
-    obstacleDetected = true;
-    stopMotors();
-    Serial.print("STOPPED ");
-    Serial.println(why);
-}
-
-void startKeyDrive(int l, int r, const char *name)
-{
-    lfrTestUntilMs = 0;
-    fingerTest = false;
-    controlMode = MANUAL_MODE;
-    obstacleDetected = false;
-    resetLineState();
-    manualLeftSpeed = constrain(l, -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
-    manualRightSpeed = constrain(r, -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
-    keyUntilMs = millis() + KEY_HOLD_MS;
-    if (keyUntilMs == 0) keyUntilMs = 1;
-    Serial.print("KEY ");
-    Serial.print(name);
-    Serial.print(" L=");
-    Serial.print(manualLeftSpeed);
-    Serial.print(" R=");
-    Serial.println(manualRightSpeed);
-}
-
-void startLfrTest()
-{
-    keyUntilMs = 0;
-    fingerTest = false;
-    controlMode = AUTO_MODE;
-    obstacleDetected = false;
-    resetLineState();
-    lfrTestUntilMs = millis() + LFR_TEST_MS;
-    if (lfrTestUntilMs == 0) lfrTestUntilMs = 1;
-    Serial.println("LFR 60 s: line following without the Pi (x = stop, l again = 60 s more)");
-}
-
-// ---- "t" finger test: no fingers = the empty reading; a finger flips that sensor = the line there ----
-byte readRawBits()
-{
-    byte b = 0;
-    for (int n = 0; n < 5; n++) if (digitalRead(IR_PINS[n]) == HIGH) b |= (1 << n);
-    return b;
-}
-
-void startFingerTest()
-{
-    stopEverything("(finger test)");
-    fingerBase = readRawBits();
-    fingerTest = true;
-    fingerUntilMs = millis() + FINGER_TEST_MS;
-    if (fingerUntilMs == 0) fingerUntilMs = 1;
-    resetLineState();
-    Serial.print("FINGER TEST 2 min. WHEELS LIFTED. No fingers reads raw ");
-    for (int n = 0; n < 5; n++) Serial.print((fingerBase >> n) & 1);
-    Serial.println(" -> a finger on a sensor = the line there. x = stop");
-    if (fingerBase != 0 && fingerBase != 0x1F)
-    {
-        Serial.println("FINGER WARNING: the sensors don't agree. Take fingers away, nothing near the array, then t again.");
-    }
-}
-
-void fingerStep()
-{
-    if (!timeBefore(fingerUntilMs))
-    {
-        fingerTest = false;
-        obstacleDetected = true;
-        stopMotors();
-        Serial.println("FINGER TEST done (t = again)");
-        return;
-    }
-    unsigned long now = millis();
-    if (!lfrDueNow && now - lastLfrCycleMs < LFR_CYCLE_MS) return;
-    lfrDueNow = false;
-    lastLfrCycleMs = now;
-
-    byte on = readRawBits() ^ fingerBase;            // bit n = finger on S(n+1)
-    int s1 = (on & 1) ? 1 : 0, s2 = (on & 2) ? 1 : 0, s3 = (on & 4) ? 1 : 0, s4 = (on & 8) ? 1 : 0, s5 = (on & 16) ? 1 : 0;
-    const char *what = lfrDecide(s1, s2, s3, s4, s5);
-    Serial.print("FINGER ");
-    Serial.println(what);
-    printSensorLine(s1, s2, s3, s4, s5);
-}
-
-// Returns true when the line was a Serial Monitor tool command.
-bool handleToolCommand(String command)
-{
-    String u = command;
-    u.toUpperCase();
-
-    // single keys; "wwww" (the same key repeated) counts as one press
-    bool sameKey = command.length() >= 1 && command.length() <= 8;
-    for (unsigned int n = 1; n < command.length() && sameKey; n++)
-    {
-        if (u.charAt(n) != u.charAt(0)) sameKey = false;
-    }
-    if (sameKey && strchr("WASDX+-VIH?L1T", u.charAt(0)) != NULL)
-    {
-        switch (u.charAt(0))
-        {
-            case 'W': startKeyDrive(keySpeed, keySpeed, "w forward"); return true;
-            case 'S': startKeyDrive(-keySpeed, -keySpeed, "s back"); return true;
-            case 'A': startKeyDrive(-keySpeed, keySpeed, "a pivot left"); return true;
-            case 'D': startKeyDrive(keySpeed, -keySpeed, "d pivot right"); return true;
-            case 'X': stopEverything("(x)"); return true;
-            case '+': keySpeed = min(MAX_MANUAL_SPEED, keySpeed + KEY_SPEED_STEP); Serial.print("KEY speed "); Serial.println(keySpeed); return true;
-            case '-': keySpeed = max(KEY_SPEED_STEP, keySpeed - KEY_SPEED_STEP); Serial.print("KEY speed "); Serial.println(keySpeed); return true;
-            case 'V': viewOn = !viewOn; Serial.println(viewOn ? "VIEW on (v = off)" : "VIEW off (v = on)"); return true;
-            case 'I':
-            {
-                int s1, s2, s3, s4, s5;
-                readLine(s1, s2, s3, s4, s5);
-                printSensorLine(s1, s2, s3, s4, s5);
-                return true;
-            }
-            case 'T': startFingerTest(); return true;
-            case 'H': case '?': printHelp(); return true;
-            case 'L': case '1': startLfrTest(); return true;
-            default: return false;
-        }
-    }
-    if (u == "VIEW 0" || u == "VIEW 1") { viewOn = (u == "VIEW 1"); return true; }
-    if (u == "STAT") { printStat(); return true; }
-    if (u == "SETTINGS") { printSettings(); return true; }
-    if (u == "TESTL" || u == "TESTR")
-    {
-        bool left = (u == "TESTL");
-        startKeyDrive(left ? keySpeed : 0, left ? 0 : keySpeed,
-                      left ? "TESTL only the LEFT wheel, forward (wrong wheel: SWAP, backward: FLIPL)"
-                           : "TESTR only the RIGHT wheel, forward (wrong wheel: SWAP, backward: FLIPR)");
-        return true;
-    }
-    if (u == "FLIPL") { if (swapSides) flipB = !flipB; else flipA = !flipA; saveFixes(); printSettings(); return true; }
-    if (u == "FLIPR") { if (swapSides) flipA = !flipA; else flipB = !flipB; saveFixes(); printSettings(); return true; }
-    if (u == "SWAP")  { swapSides = !swapSides; saveFixes(); printSettings(); return true; }
-    if (u == "FACTORY")
-    {
-        flipA = flipB = swapSides = false;
-        saveFixes();
-        Serial.println("FACTORY: wheel fixes cleared");
-        printSettings();
-        return true;
-    }
-    return false;
-}
-
-// ════════════════════════════════════════════════════════════════════════════
 //  PI COMMANDS
 // ════════════════════════════════════════════════════════════════════════════
 
-void runCommand(String command)
+// Returns true when the line was a Pi command (or STAT / VIEW).
+bool runPiCommand(const String &command)
 {
-    command.trim();
-    if (command.length() == 0) return;
-
-    if (command == "SAFE" || command == "STOP" || command.startsWith("MODE:") || command.startsWith("DRIVE:"))
+    bool pi = command == "SAFE" || command == "STOP" || command.startsWith("MODE:") || command.startsWith("DRIVE:");
+    if (pi && (manualMode || lfrTestUntilMs))         // the Pi is in charge again: end the Serial Monitor runs
     {
-        keyUntilMs = 0;                      // the Pi is in charge again
+        manualMode = false;
+        manualLeftTarget = 0;
+        manualRightTarget = 0;
         lfrTestUntilMs = 0;
-        if (fingerTest) { fingerTest = false; stopMotors(); }
+        stopMotors();
     }
-
-    if (handleToolCommand(command)) return;
 
     if (command == "STOP")
     {
         lastSafetyHeartbeatMs = millis();
         obstacleDetected = true;
-        manualLeftSpeed = 0;
-        manualRightSpeed = 0;
+        piLeftTarget = 0;
+        piRightTarget = 0;
     }
     else if (command == "SAFE" || command == "MODE:AUTO")
     {
         lastSafetyHeartbeatMs = millis();
-        if (controlMode != AUTO_MODE || obstacleDetected) resetLineState();
         controlMode = AUTO_MODE;
         obstacleDetected = false;
     }
@@ -656,20 +600,19 @@ void runCommand(String command)
         lastSafetyHeartbeatMs = millis();
         if (controlMode != MANUAL_MODE)
         {
-            manualLeftSpeed = 0;
-            manualRightSpeed = 0;
+            piLeftTarget = 0;
+            piRightTarget = 0;
         }
         controlMode = MANUAL_MODE;
         obstacleDetected = false;
-        resetLineState();
     }
     else if (command.startsWith("DRIVE:"))
     {
         int comma = command.indexOf(',', 6);
         if (controlMode == MANUAL_MODE && comma > 6)
         {
-            manualLeftSpeed = constrain(command.substring(6, comma).toInt(), -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
-            manualRightSpeed = constrain(command.substring(comma + 1).toInt(), -MAX_MANUAL_SPEED, MAX_MANUAL_SPEED);
+            piLeftTarget = constrain(command.substring(6, comma).toInt(), -MAX_PI_SPEED, MAX_PI_SPEED);
+            piRightTarget = constrain(command.substring(comma + 1).toInt(), -MAX_PI_SPEED, MAX_PI_SPEED);
             lastSafetyHeartbeatMs = millis();
         }
     }
@@ -686,6 +629,38 @@ void runCommand(String command)
             qrOutputs[qrValue - 1] = true;
         }
     }
+    else if (command == "STAT")
+    {
+        printStat();
+    }
+    else if (command == "VIEW 0" || command == "VIEW 1")
+    {
+        viewOn = (command == "VIEW 1");
+    }
+    else
+    {
+        return false;
+    }
+    return true;
+}
+
+void runLine(String command)
+{
+    command.trim();
+    if (command.length() == 0)
+    {
+        return;
+    }
+    String u = command;
+    u.toUpperCase();
+    if (runPiCommand(u))
+    {
+        return;
+    }
+    for (unsigned int i = 0; i < command.length(); i++)   // anything else: keys, one by one (like the LFR code)
+    {
+        handleKey(command.charAt(i));
+    }
 }
 
 void processSerialCommands()
@@ -697,7 +672,11 @@ void processSerialCommands()
         {
             String command = serialBuffer;
             serialBuffer = "";
-            runCommand(command);
+            runLine(command);
+        }
+        else if (incoming == ' ' && serialBuffer.length() == 0)
+        {
+            handleKey(' ');                            // space = stop, right away
         }
         else
         {
@@ -712,14 +691,12 @@ void processSerialCommands()
     {
         String command = serialBuffer;
         serialBuffer = "";
-        command.trim();
-        if (command.length() > 0) handleToolCommand(command);
+        runLine(command);
     }
 
-    if ((millis() - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS && !localHold())
+    if ((millis() - lastSafetyHeartbeatMs) >= COMMAND_TIMEOUT_MS)
     {
-        obstacleDetected = true;
-        stopMotors();
+        obstacleDetected = true;                       // no Pi: stop (the Serial Monitor runs don't need it)
     }
 }
 
@@ -727,86 +704,93 @@ void processSerialCommands()
 //  SETUP / LOOP
 // ════════════════════════════════════════════════════════════════════════════
 
-void setup() {
-  Serial.begin(SERIAL_BAUD);
-  serialBuffer.reserve(32);
+void setup()
+{
+    Serial.begin(SERIAL_BAUD);
+    serialBuffer.reserve(32);
 
-  // Configure motor control pins as outputs
-  pinMode(MOTOR_L_PIN1, OUTPUT);
-  pinMode(MOTOR_L_PIN2, OUTPUT);
-  pinMode(MOTOR_R_PIN1, OUTPUT);
-  pinMode(MOTOR_R_PIN2, OUTPUT);
+    for (uint8_t i = 0; i < 5; i++)
+    {
+        pinMode(IR_PINS[i], INPUT);
+    }
 
-  // Configure IR sensor pins as inputs
-  for (int i = 0; i < 5; i++) {
-    pinMode(IR_PINS[i], INPUT);
-  }
+    pinMode(MOTOR_L_PIN1, OUTPUT);
+    pinMode(MOTOR_L_PIN2, OUTPUT);
+    pinMode(MOTOR_R_PIN1, OUTPUT);
+    pinMode(MOTOR_R_PIN2, OUTPUT);
+    pinMode(BUZZER_PIN, OUTPUT);
+    for (int i = 0; i < 10; i++)
+    {
+        pinMode(QR_OUTPUT_PINS[i], OUTPUT);
+        digitalWrite(QR_OUTPUT_PINS[i], LOW);
+    }
 
-  pinMode(BUZZER_PIN, OUTPUT);
+    stopMotors();
+    lastPositionUpdateMs = millis();
+    lastSafetyHeartbeatMs = millis();
+    digitalWrite(BUZZER_PIN, LOW);
 
-  for (int i = 0; i < 10; i++)
-  {
-    pinMode(QR_OUTPUT_PINS[i], OUTPUT);
-    digitalWrite(QR_OUTPUT_PINS[i], LOW);
-  }
-
-  stopMotors();
-  digitalWrite(BUZZER_PIN, LOW);
-  lastSafetyHeartbeatMs = millis();
-  loadFixes();
-
-  Serial.println("MediCart ready");
-  Serial.println("FW medicart 3.1");             // the Pi checks this
-  Serial.println("Type l to line-follow without the Pi, h for help, v to stop/start the live view.");
+    Serial.println("MediCart ready");
+    Serial.println("FW medicart 3.4");             // the Pi checks this
+    Serial.println("Type l to line-follow without the Pi, p for manual keys, h for help, v to stop/start the live view.");
 }
 
-void loop() {
-  processSerialCommands();
+void loop()
+{
+    processSerialCommands();
 
-  if (fingerTest)                                // "t": no Pi timeout, no buzzer
-  {
-    fingerStep();
-    digitalWrite(BUZZER_PIN, LOW);
+    if (lfrTestUntilMs != 0 && !timeBefore(lfrTestUntilMs))
+    {
+        lfrTestUntilMs = 0;
+        stopMotors();
+        Serial.println("LFR done (l = 60 s more)");
+    }
+
+    bool following = false;
+    bool bench = manualMode || lfrTestUntilMs != 0;
+
+    if (manualMode)                                    // LFR code: Serial Monitor manual mode
+    {
+        driveSmoothly(manualLeftTarget, manualRightTarget);
+    }
+    else if (lfrTestUntilMs != 0)                      // "l": line following without the Pi
+    {
+        following = true;
+    }
+    else if (obstacleDetected)                         // person in front, emergency stop, or no Pi
+    {
+        stopMotors();                                  // LFR code's smooth stop: called every loop, ramps to 0
+    }
+    else if (controlMode == MANUAL_MODE)               // the Pi drives
+    {
+        driveSmoothly(piLeftTarget, piRightTarget);
+    }
+    else                                               // the Pi says the path is clear
+    {
+        following = true;
+    }
+
+    if (following)
+    {
+        if (!wasFollowing)
+        {
+            resetLineFollowing();
+        }
+        lineFollowStep();
+    }
+    else
+    {
+        lineLost = false;
+    }
+    wasFollowing = following;
+
+    buzzerControl(bench);
+    debugReport();
     updateQROutputs();
-    return;
-  }
-  if (keyUntilMs != 0 && !timeBefore(keyUntilMs))   // key press time is up
-  {
-    keyUntilMs = 0;
-    manualLeftSpeed = 0;
-    manualRightSpeed = 0;
-  }
-  if (lfrTestUntilMs != 0 && !timeBefore(lfrTestUntilMs))
-  {
-    lfrTestUntilMs = 0;
-    Serial.println("LFR done (l = 60 s more)");
-  }
-  buzzerControl();
 
-  bool following = false;
-  if (obstacleDetected)
-  {
-    stopMotors();
-    resetLineState();                            // a safety stop is not "line lost"
-  }
-  else if (controlMode == MANUAL_MODE)
-  {
-    drive(manualLeftSpeed, manualRightSpeed);
-    resetLineState();
-  }
-  else
-  {
-    lineFollowing();
-    following = true;
-  }
-
-  lineLostBeep();
-  debugReport();
-  updateQROutputs();
-
-  if (viewOn && !following && millis() - lastViewMs >= VIEW_EVERY_MS)
-  {
-    lastViewMs = millis();
-    printView();
-  }
+    if (viewOn && millis() - lastViewMs >= VIEW_EVERY_MS)
+    {
+        lastViewMs = millis();
+        printView();
+    }
 }

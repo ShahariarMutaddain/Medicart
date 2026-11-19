@@ -62,6 +62,11 @@ class FirebaseBridge:
         with self.tlock:
             if self.id_token and time.time() < self.expires - 300:
                 return self.id_token
+            # [MC-3.1] after a failed sign-in, wait before trying again (Firebase locks the account
+            # with TOO_MANY_ATTEMPTS if we retry every second). Restart the service to retry at once.
+            blocked_until = getattr(self, "_auth_blocked_until", 0.0)
+            if time.time() < blocked_until:
+                raise RuntimeError(f"{self._auth_error} (next try in {int(blocked_until - time.time())} s)")
             try:
                 if self.refresh_token:
                     r = self.http.post(f"{self.token_base}/v1/token?key={self.api_key}",
@@ -76,8 +81,20 @@ class FirebaseBridge:
                                    json={"email": self.email, "password": self.password, "returnSecureToken": True},
                                    timeout=15)
                 if not r.ok:
-                    msg = r.json().get("error", {}).get("message", "") if r.content else r.status_code
-                    raise RuntimeError(f"sign-in failed: {msg}")
+                    msg = str(r.json().get("error", {}).get("message", "") if r.content else r.status_code)
+                    if msg.startswith("TOO_MANY_ATTEMPTS"):
+                        wait = 900          # 15 min: let Firebase's lock expire
+                    elif msg.startswith(("INVALID_LOGIN_CREDENTIALS", "INVALID_PASSWORD", "EMAIL_NOT_FOUND",
+                                         "USER_DISABLED", "INVALID_EMAIL")):
+                        wait = 600          # wrong password: fix control.env, then restart the service
+                    else:
+                        wait = 30
+                    self._auth_error = f"sign-in failed: {msg}"
+                    self._auth_blocked_until = time.time() + wait
+                    print(f"[FIREBASE] {self._auth_error} - next try in {wait // 60} min "
+                          f"(or fix CONTROL_PASSWORD and: sudo systemctl restart medicart-vision)", flush=True)
+                    raise RuntimeError(self._auth_error)
+                self._auth_blocked_until = 0.0
                 j = r.json()
                 self.id_token, self.refresh_token = j["idToken"], j["refreshToken"]
                 self.expires = time.time() + int(j.get("expiresIn", 3600))
@@ -92,7 +109,8 @@ class FirebaseBridge:
                                 data=json.dumps(data), timeout=10)
             return r.ok
         except (RuntimeError, requests.RequestException) as exc:
-            print(f"[FIREBASE] write failed: {exc}", flush=True)
+            if time.time() >= getattr(self, "_auth_blocked_until", 0.0):   # [MC-3.1] no log spam while waiting
+                print(f"[FIREBASE] write failed: {exc}", flush=True)
             return False
 
     def get(self, path: str):
@@ -232,7 +250,7 @@ class FirebaseBridge:
             except Exception as exc:  # noqa: BLE001
                 if self.online:
                     print(f"[FIREBASE] disconnected ({exc})", flush=True)
-                elif not self._stop.is_set():
+                elif not self._stop.is_set() and "next try in" not in str(exc):   # [MC-3.1] quiet while waiting
                     print(f"[FIREBASE] {exc}", flush=True)
                 self.online = False
                 self._stop.wait(backoff)

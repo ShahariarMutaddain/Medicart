@@ -1,144 +1,303 @@
-// Motor Control Pins (Pins 2, 3, 4, 5 handle both PWM speed and direction)
-const int MOTOR_L_PIN1 = 2; // Left Motor Forward / PWM
-const int MOTOR_L_PIN2 = 3; // Left Motor Backward / PWM
-const int MOTOR_R_PIN1 = 4; // Right Motor Forward / PWM
-const int MOTOR_R_PIN2 = 5; // Right Motor Backward / PWM
+#include <Arduino.h>
 
-const int IR_PINS[5] = {A8, A9, A10, A11, A12};  // S1 (leftmost) to S5 (rightmost)
-const int BUZZER_PIN = 25;
+// Motor driver pins
+const uint8_t MOTOR_L_PIN1 = 2;
+const uint8_t MOTOR_L_PIN2 = 3;
+const uint8_t MOTOR_R_PIN1 = 4;
+const uint8_t MOTOR_R_PIN2 = 5;
 
-// Speed: 15% speed -> PWM 38 out of 255
-const int MOTOR_SPEED = 38; 
+// IR sensors: far left, left, center, right, far right
+const uint8_t IR_PINS[5] = {A8, A9, A10, A11, A12};
 
-// Active slide brake speed: inside wheel spins slightly backward (PWM 15) for ultra-hard cornering on both sides
-const int SLIDE_BRAKE_SPEED = 15; 
+// true for a black line on a white surface; false for a white line on black
+const bool BLACK_LINE = true;
 
-// Variables to track current PWM values for Serial printing
-int currentLeftPWM = 0;
-int currentRightPWM = 0;
+// Line-following tuning
+const int LINE_BASE_SPEED = 50;
+const int LINE_STEERING_GAIN = 20;
+const int LINE_MAX_STEERING = 40;
+const int MAX_MOTOR_SPEED = 50;
+const int SEARCH_SPEED = 50;
+const int MANUAL_SPEED = 50;
+const int MOTOR_SLEW_RATE_PER_SECOND = 300;
+const unsigned long POSITION_FILTER_MS = 25;
+const unsigned long LOST_LINE_SEARCH_MS = 1500;
 
-// Anti-glitch counter for temporary line dropouts
-int offLineCount = 0;
-const int GLITCH_THRESHOLD = 2; // Must stay off-line for 2 cycles before stopping
+int lastLineSide = 0; // -1 = left, +1 = right
+int currentLeftSpeed = 0;
+int currentRightSpeed = 0;
+float filteredPosition = 0.0f;
+bool positionFilterInitialized = false;
+bool lineLost = false;
+bool manualMode = false;
+int manualLeftTarget = 0;
+int manualRightTarget = 0;
+unsigned long lostLineStartMs = 0;
+unsigned long lastMotorUpdateMs = 0;
+unsigned long motorSlewRemainder = 0;
+unsigned long lastPositionUpdateMs = 0;
 
-void setup() {
-  Serial.begin(9600);
-
-  // Configure motor control pins as outputs
-  pinMode(MOTOR_L_PIN1, OUTPUT);
-  pinMode(MOTOR_L_PIN2, OUTPUT);
-  pinMode(MOTOR_R_PIN1, OUTPUT);
-  pinMode(MOTOR_R_PIN2, OUTPUT);
-
-  // Configure IR sensor pins as inputs
-  for (int i = 0; i < 5; i++) {
-    pinMode(IR_PINS[i], INPUT);
-  }
-  
-  pinMode(BUZZER_PIN, OUTPUT);
+void setLeftMotor(int speed)
+{
+    if (speed > 0)
+    {
+        analogWrite(MOTOR_L_PIN1, speed);
+        analogWrite(MOTOR_L_PIN2, 0);
+    }
+    else if (speed < 0)
+    {
+        analogWrite(MOTOR_L_PIN1, 0);
+        analogWrite(MOTOR_L_PIN2, -speed);
+    }
+    else
+    {
+        analogWrite(MOTOR_L_PIN1, 0);
+        analogWrite(MOTOR_L_PIN2, 0);
+    }
 }
 
-void setMotorPWM(int leftForward, int leftBackward, int rightForward, int rightBackward) {
-  // Track active speed for Serial display
-  currentLeftPWM = (leftForward > 0) ? leftForward : leftBackward;
-  currentRightPWM = (rightForward > 0) ? rightForward : rightBackward;
-
-  analogWrite(MOTOR_L_PIN1, leftForward);
-  analogWrite(MOTOR_L_PIN2, leftBackward);
-  analogWrite(MOTOR_R_PIN1, rightForward);
-  analogWrite(MOTOR_R_PIN2, rightBackward);
+void setRightMotor(int speed)
+{
+    if (speed > 0)
+    {
+        analogWrite(MOTOR_R_PIN1, speed);
+        analogWrite(MOTOR_R_PIN2, 0);
+    }
+    else if (speed < 0)
+    {
+        analogWrite(MOTOR_R_PIN1, 0);
+        analogWrite(MOTOR_R_PIN2, -speed);
+    }
+    else
+    {
+        analogWrite(MOTOR_R_PIN1, 0);
+        analogWrite(MOTOR_R_PIN2, 0);
+    }
 }
 
-void moveForward() {
-  setMotorPWM(MOTOR_SPEED, 0, MOTOR_SPEED, 0);
+void driveSmoothly(int leftTarget, int rightTarget);
+
+void stopMotors()
+{
+    driveSmoothly(0, 0);
 }
 
-void slideLeft() {
-  // Left wheel actively brakes/reverses slightly, right wheel pushes forward
-  setMotorPWM(0, SLIDE_BRAKE_SPEED, MOTOR_SPEED, 0); 
+int approachSpeed(int current, int target, unsigned long maxChange)
+{
+    int step = (int)maxChange;
+    if (target > current)
+    {
+        return target - current > step ? current + step : target;
+    }
+    if (target < current)
+    {
+        return current - target > step ? current - step : target;
+    }
+    return current;
 }
 
-void turnLeft() {
-  setMotorPWM(0, MOTOR_SPEED, MOTOR_SPEED, 0); // Sharp pivot turn left
+void driveSmoothly(int leftTarget, int rightTarget)
+{
+    unsigned long now = millis();
+    unsigned long elapsed = now - lastMotorUpdateMs;
+    lastMotorUpdateMs = now;
+
+    motorSlewRemainder += (unsigned long)MOTOR_SLEW_RATE_PER_SECOND * elapsed;
+    unsigned long maxChange = motorSlewRemainder / 1000;
+    motorSlewRemainder %= 1000;
+
+    if (maxChange > 0)
+    {
+        currentLeftSpeed = approachSpeed(currentLeftSpeed, leftTarget, maxChange);
+        currentRightSpeed = approachSpeed(currentRightSpeed, rightTarget, maxChange);
+    }
+
+    setLeftMotor(currentLeftSpeed);
+    setRightMotor(currentRightSpeed);
 }
 
-void slideRight() {
-  // Right wheel actively brakes/reverses slightly, left wheel pushes forward
-  setMotorPWM(MOTOR_SPEED, 0, 0, SLIDE_BRAKE_SPEED); 
+bool sensorSeesLine(uint8_t pin)
+{
+    int reading = digitalRead(pin);
+    return BLACK_LINE ? reading == LOW : reading == HIGH;
 }
 
-void turnRight() {
-  setMotorPWM(MOTOR_SPEED, 0, 0, MOTOR_SPEED); // Sharp pivot turn right
+bool readLinePosition(float &position)
+{
+    const float sensorPositions[5] = {-2.0f, -1.0f, 0.0f, 1.0f, 2.0f};
+    float positionSum = 0.0f;
+    int activeSensors = 0;
+
+    for (uint8_t i = 0; i < 5; i++)
+    {
+        if (sensorSeesLine(IR_PINS[i]))
+        {
+            positionSum += sensorPositions[i];
+            activeSensors++;
+        }
+    }
+
+    if (activeSensors == 0)
+    {
+        return false;
+    }
+
+    position = positionSum / activeSensors;
+    return true;
 }
 
-void stopMotors() {
-  setMotorPWM(0, 0, 0, 0);
+float smoothPosition(float position)
+{
+    unsigned long now = millis();
+    unsigned long elapsed = now - lastPositionUpdateMs;
+    lastPositionUpdateMs = now;
+
+    if (!positionFilterInitialized)
+    {
+        filteredPosition = position;
+        positionFilterInitialized = true;
+    }
+    else
+    {
+        float alpha = (float)elapsed / (POSITION_FILTER_MS + elapsed);
+        filteredPosition += alpha * (position - filteredPosition);
+    }
+    return filteredPosition;
 }
 
-void loop() {
-  // Inverted readings: '!' flips 0 to 1 and 1 to 0
-  int s1 = !digitalRead(IR_PINS[0]); // Leftmost
-  int s2 = !digitalRead(IR_PINS[1]); // Mid-Left
-  int s3 = !digitalRead(IR_PINS[2]); // Center
-  int s4 = !digitalRead(IR_PINS[3]); // Mid-Right
-  int s5 = !digitalRead(IR_PINS[4]); // Rightmost
+void processManualCommands()
+{
+    while (Serial.available() > 0)
+    {
+        char key = Serial.read();
+        if (key >= 'A' && key <= 'Z')
+        {
+            key = key - 'A' + 'a';
+        }
 
-  // Check if all sensors see white (off line / potential glitch)
-  if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
-    offLineCount++;
-    if (offLineCount >= GLITCH_THRESHOLD) {
-      stopMotors();
-      Serial.println("stop (confirmed off-line)");
-    } else {
-      // Ignore the momentary glitch and maintain forward momentum briefly
-      moveForward();
-      Serial.println("forwrd (glitch ignored)");
-    }
-  }
-  else {
-    // Reset glitch counter as soon as a valid signal is detected
-    offLineCount = 0;
+        if (key == 'p')
+        {
+            manualMode = !manualMode;
+            manualLeftTarget = 0;
+            manualRightTarget = 0;
+            stopMotors();
 
-    // State matching logic
-    if (s1 == 0 && s2 == 0 && s3 == 1 && s4 == 0 && s5 == 0) {
-      moveForward();
-      Serial.println("forwrd");
-    }
-    else if (s1 == 0 && s2 == 1 && s3 == 0 && s4 == 0 && s5 == 0) {
-      slideLeft();
-      Serial.println("slide left (active reverse brake)");
-    }
-    else if (s1 == 1 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 0) {
-      turnLeft();
-      Serial.println("left (sharp)");
-    }
-    else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 1 && s5 == 0) {
-      slideRight();
-      Serial.println("slide right (active reverse brake)");
-    }
-    else if (s1 == 0 && s2 == 0 && s3 == 0 && s4 == 0 && s5 == 1) {
-      turnRight();
-      Serial.println("right (sharp)");
-    }
-    else if (s1 == 1 && s2 == 1 && s3 == 1 && s4 == 1 && s5 == 1) {
-      stopMotors();
-      Serial.println("stop (line junction)");
-    }
-    else {
-      moveForward();
-      Serial.println("forwrd (default)");
-    }
-  }
+            if (!manualMode)
+            {
+                lineLost = false;
+                lastLineSide = 0;
+                positionFilterInitialized = false;
+                lastPositionUpdateMs = millis();
+            }
+            continue;
+        }
 
-  // Print sensors, current PWM values, and status to Serial Monitor
-  Serial.print("S1: "); Serial.print(s1);
-  Serial.print("\tS2: "); Serial.print(s2);
-  Serial.print("\tS3: "); Serial.print(s3);
-  Serial.print("\tS4: "); Serial.print(s4);
-  Serial.print("\tS5: "); Serial.print(s5);
-  Serial.print("\t| PWM_L: "); Serial.print(currentLeftPWM);
-  Serial.print("\tPWM_R: "); Serial.print(currentRightPWM);
-  Serial.println();
+        if (!manualMode)
+        {
+            continue;
+        }
 
-  delay(50); 
+        switch (key)
+        {
+            case 'w':
+                manualLeftTarget = MANUAL_SPEED;
+                manualRightTarget = MANUAL_SPEED;
+                break;
+            case 'a':
+                manualLeftTarget = 0;
+                manualRightTarget = MANUAL_SPEED;
+                break;
+            case 'd':
+                manualLeftTarget = MANUAL_SPEED;
+                manualRightTarget = 0;
+                break;
+            case 's':
+                manualLeftTarget = -MANUAL_SPEED;
+                manualRightTarget = -MANUAL_SPEED;
+                break;
+            case 'x':
+            case ' ':
+                manualLeftTarget = 0;
+                manualRightTarget = 0;
+                stopMotors();
+                break;
+        }
+    }
+}
+
+void setup()
+{
+    Serial.begin(115200);
+
+    for (uint8_t i = 0; i < 5; i++)
+    {
+        pinMode(IR_PINS[i], INPUT);
+    }
+
+    pinMode(MOTOR_L_PIN1, OUTPUT);
+    pinMode(MOTOR_L_PIN2, OUTPUT);
+    pinMode(MOTOR_R_PIN1, OUTPUT);
+    pinMode(MOTOR_R_PIN2, OUTPUT);
+
+    stopMotors();
+    lastPositionUpdateMs = millis();
+}
+
+void loop()
+{
+    processManualCommands();
+    if (manualMode)
+    {
+        driveSmoothly(manualLeftTarget, manualRightTarget);
+        return;
+    }
+
+    float position;
+    unsigned long now = millis();
+
+    if (!readLinePosition(position))
+    {
+        if (!lineLost)
+        {
+            lineLost = true;
+            lostLineStartMs = now;
+        }
+
+        if (lastLineSide != 0 && now - lostLineStartMs < LOST_LINE_SEARCH_MS)
+        {
+            if (lastLineSide < 0)
+            {
+                driveSmoothly(-SEARCH_SPEED, SEARCH_SPEED);
+            }
+            else
+            {
+                driveSmoothly(SEARCH_SPEED, -SEARCH_SPEED);
+            }
+        }
+        else
+        {
+            stopMotors();
+        }
+        return;
+    }
+
+    lineLost = false;
+    position = smoothPosition(position);
+
+    if (position < -0.1f)
+    {
+        lastLineSide = -1;
+    }
+    else if (position > 0.1f)
+    {
+        lastLineSide = 1;
+    }
+
+    int steering = (int)(position * LINE_STEERING_GAIN);
+    steering = constrain(steering, -LINE_MAX_STEERING, LINE_MAX_STEERING);
+
+    int baseSpeed = LINE_BASE_SPEED - (int)(abs(position) * 12.0f);
+    int leftTarget = constrain(baseSpeed + steering, 0, MAX_MOTOR_SPEED);
+    int rightTarget = constrain(baseSpeed - steering, 0, MAX_MOTOR_SPEED);
+    driveSmoothly(leftTarget, rightTarget);
 }
