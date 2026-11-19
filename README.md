@@ -721,14 +721,16 @@ Independent University, Bangladesh (IUB) · with the IEEE Robotics & Automation 
 | Role | People |
 |---|---|
 | Supervisor | **Dr. Feroz Ahmed** |
-| Team leads | Kalleyen Kumar Tirtho · Ankit Roy · Shahariar Mutaddain |
-| Web console, telemedicine and MediCart 2.0 integration | Tahsan Masum Fahim |
-| Firmware and original robot program | Rifat Ahmed · Saif Al Islam Hemal |
-| Simulation | Shahariar Mutaddain · Omar Ahmed |
-| Cable management | Ankit Roy · Sadman Sami |
-| Looks and aesthetics | Ove Roy |
+| Team leads | Kalleyen Kumar Tirtho · Shahariar Mutaddain · Ankit Roy |
+| Software team lead | Shahariar Mutaddain |
+| Web console, telemedicine, fine-tuning and MediCart 2.0 integration | Tahsan Masum Fahim |
+| Firmware and original robot program | Rifat Ahmmed |
+| Simulation | Shahariar Mutaddain · Tahsan Masum Fahim |
+| Cable management | Ankit Roy · Sadman Sami · Ahmed Omar |
+| Looks and aesthetics | Saif Al Islam Hemal · Ove Roy |
+| 3D modeling | Mahfuj Rohoman |
 
-MediCart 2.0 builds on the original prototype (*MideCart-of-IUB*) by Rifat Ahmed. His files and behaviour are kept unchanged in [`MideCart/`](MideCart/) and [`arduino/history/`](arduino/history/).
+MediCart 2.0 builds on the original prototype (*MideCart-of-IUB*) by Rifat Ahmmed. His files and behaviour are kept unchanged in [`MideCart/`](MideCart/) and [`arduino/history/`](arduino/history/).
 
 ---
 
