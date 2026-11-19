@@ -317,6 +317,12 @@ body::before {
 .drive-mode { grid-row: span 1; }
 .drive-pad-card { grid-row: span 2; }
 @media (max-width: 1000px) { .drive-grid { grid-template-columns: 1fr; } .drive-pad-card { grid-row: auto; } }
+.drive-announce .ann-main { width: 100%; height: auto; min-height: 58px; flex-direction: column; gap: 2px; padding: 10px 16px; }
+.drive-announce .ann-main b { font-size: 16px; }
+.drive-announce .ann-main .bn { font-size: 13px; font-weight: 500; opacity: .85; }
+.ann-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; }
+.ann-grid .btn { justify-content: center; }
+.drive-announce .btn.sending { opacity: .6; }
 .mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .mode-btn { display: grid; justify-items: start; gap: 2px; text-align: left; padding: 12px 14px; border-radius: var(--r-md); border: 1.5px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; font: inherit; transition: border-color .15s, background-color .15s; min-width: 0; }
 .mode-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; color: var(--text-3); margin-bottom: 4px; }

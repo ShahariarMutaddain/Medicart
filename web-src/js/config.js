@@ -6,7 +6,7 @@
 // ════════════════════════════════════════════════════════════════
 
 (function () {
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '3.5.0';
 
 // Which cart this deployment talks to. One console can serve one cart;
 // for a second cart, deploy a copy with CART_ID = 'medicart-02'.

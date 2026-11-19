@@ -20,7 +20,7 @@ SRC = ROOT / "web-src"
 
 def datauri(rel: str) -> str:
     p = SRC / rel
-    mime = "image/png" if p.suffix == ".png" else "image/svg+xml"
+    mime = {".png": "image/png", ".mp3": "audio/mpeg"}.get(p.suffix, "image/svg+xml")
     return f"data:{mime};base64," + base64.b64encode(p.read_bytes()).decode()
 
 
@@ -37,7 +37,7 @@ def build(page: str) -> int:
         i = s.index('<script type="module">')
         s = s[:i] + f"<script>/* ═══ {app} (after the page markup, like defer) ═══ */\n" + \
             (SRC / app).read_text(encoding="utf-8") + "\n</script>\n" + s[i:]
-    s = re.sub(r"assets/(iub-logo\.png|avatars/[a-z]+\.svg)", lambda m: datauri("assets/" + m.group(1)), s)
+    s = re.sub(r"assets/(iub-logo\.png|avatars/[a-z]+\.svg|sounds/\d{4}\.mp3)", lambda m: datauri("assets/" + m.group(1)), s)
     s = s.replace("Make sure the js/ folder sits next to this page.", "Reload the page.")
     for bad in ('src="js/', 'href="assets/', 'src="assets/'):
         if bad in s:

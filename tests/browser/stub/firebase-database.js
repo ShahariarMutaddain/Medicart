@@ -31,13 +31,34 @@ function setPath(obj, path, val) {
   if (val === null) delete n[parts[parts.length - 1]]; else n[parts[parts.length - 1]] = val;
   return root;
 }
+// One shared EventSource on the root for all listeners (like the real SDK's single connection):
+// a browser allows only 6 connections per host, so one stream per listener blocked writes.
+let tree = null, stream = null;
+const listeners = new Set();
+function at(path) {
+  let n = tree;
+  for (const part of path.split('/').filter(Boolean)) { if (!n || typeof n !== 'object') return null; n = n[part]; }
+  return n === undefined ? null : n;
+}
+function notify() {
+  for (const l of listeners) {
+    const v = at(l.path); const j = JSON.stringify(v);
+    if (j !== l.last) { l.last = j; l.cb(snap(v, l.key)); }
+  }
+}
+function ensureStream() {
+  if (stream) return;
+  stream = new EventSource(url(''));
+  stream.addEventListener('put', (e) => { const m = JSON.parse(e.data); tree = setPath(tree, m.path, m.data); notify(); });
+  stream.addEventListener('patch', (e) => { const m = JSON.parse(e.data); for (const [k, v] of Object.entries(m.data || {})) tree = setPath(tree, `${m.path === '/' ? '' : m.path}/${k}`, v); notify(); });
+}
 export function onValue(r, cb) {
   if (r.path.startsWith('.info')) { setTimeout(() => cb(snap(r.path.endsWith('connected') ? true : 0, null)), 0); return () => {}; }
-  let value = null;
-  const es = new EventSource(url(r.path));
-  es.addEventListener('put', (e) => { const m = JSON.parse(e.data); value = setPath(value, m.path, m.data); cb(snap(value, r.key)); });
-  es.addEventListener('patch', (e) => { const m = JSON.parse(e.data); for (const [k, v] of Object.entries(m.data || {})) value = setPath(value, `${m.path === '/' ? '' : m.path}/${k}`, v); cb(snap(value, r.key)); });
-  return () => es.close();
+  const l = { path: r.path, key: r.key, cb, last: undefined };
+  listeners.add(l);
+  if (stream && tree !== null) setTimeout(() => { const v = at(l.path); l.last = JSON.stringify(v); cb(snap(v, l.key)); }, 0);
+  ensureStream();
+  return () => listeners.delete(l);
 }
 export function onChildAdded(r, cb) {
   const seen = new Set();

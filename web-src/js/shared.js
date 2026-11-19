@@ -27,6 +27,8 @@ function normalizeSensor(raw) {
     fingerDetected: finger,
     state: String(d.state ?? (finger ? 'measuring' : 'no_finger')),
     samplesCollected: num(d.samplesCollected ?? d.samples),
+    motion: Boolean(d.motion),          // ESP32 3.0: the finger is moving
+    spo2Held: Boolean(d.spo2Held),      // ESP32 3.0: last good SpO2 kept during movement
     deviceId: String(d.deviceId ?? 'MEDICART-01'),
     uptime: num(d.uptime),
     at: Date.now(),

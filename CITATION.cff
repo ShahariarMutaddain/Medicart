@@ -1,0 +1,12 @@
+cff-version: 1.2.0
+message: "If you use MediCart in your work, please cite it as below."
+title: "MediCart: an autonomous medical delivery cart with vision safety, live vital signs and telemedicine"
+type: software
+authors:
+  - name: "IUB Robotics Team, Department of Electrical & Electronic Engineering, Independent University, Bangladesh"
+version: "3.5.0"
+date-released: 2026-11-19
+license: MIT
+repository-code: "https://github.com/tahsanmasum/MediCart"
+url: "https://medicart-iub.vercel.app"
+keywords: [robotics, telemedicine, line-following, yolov8, raspberry-pi, esp32, webrtc, firebase, mqtt, bangla]

@@ -50,7 +50,7 @@ def main():
         st = rig.status()
         check(st["mode"] == "stopped", "starts STOPPED (Rifat's default)", st["mode"])
         check(wait_until(lambda: rig.status()["serial"] == "connected", 6), "Arduino connected over serial")
-        check(wait_until(lambda: "3.1" in rig.status()["firmware"], 6), "firmware 3.1 detected", rig.status()["firmware"])
+        check(wait_until(lambda: "3.4" in rig.status()["firmware"], 6), "firmware 3.4 detected", rig.status()["firmware"])
         check(wait_until(lambda: rig.status()["line"] == "00100", 4), "line sensors reported (STAT)", rig.status()["line"])
         time.sleep(1.0)
         check(rig.motors() == (0, 0), "stopped at start: wheels still")
@@ -62,13 +62,13 @@ def main():
         # ---- AUTO through Rifat's API ----
         code, _ = rig.mode("auto")
         check(code == 200, "local dashboard: Auto accepted")
-        check(wait_until(lambda: rig.motors() == (38, 38), 3), "AUTO: line following (centre = 38, the LFR speed)", rig.motors())
+        check(wait_until(lambda: rig.motors() == (50, 50), 3), "AUTO: line following (centre = 50, the LFR speed)", rig.motors())
         rig.person = "close"
         t0 = time.time()
         check(wait_until(lambda: rig.motors() == (0, 0), 3), "AUTO: person close -> stop", f"{time.time() - t0:.2f}s")
         check(wait_until(lambda: rig.state().get("vision") == "blocked", 3), "console sees vision blocked")
         rig.person = "far"
-        check(wait_until(lambda: rig.motors() == (38, 38), 4), "AUTO: person far away -> continues", rig.motors())
+        check(wait_until(lambda: rig.motors() == (50, 50), 4), "AUTO: person far away -> continues", rig.motors())
         rig.person = None
 
         # ---- MANUAL through Rifat's API ----
@@ -115,7 +115,7 @@ def main():
         console_drive(rig, 250, -250, 0.8)
         check(rig.motors() == (180, -180), "console: capped at 180", rig.motors())
         rig.request("AUTO", "c2")
-        check(wait_until(lambda: rig.motors() == (38, 38), 4), "console: Auto -> line following")
+        check(wait_until(lambda: rig.motors() == (50, 50), 4), "console: Auto -> line following")
         rig.request("STOP", "c3")
         check(wait_until(lambda: rig.motors() == (0, 0), 2) and rig.status()["mode"] == "stopped", "console: EMERGENCY STOP")
         console_drive(rig, 120, 120, 0.6)
@@ -149,7 +149,7 @@ def main():
 
         # ---- program stops while driving ----
         rig.mode("manual")
-        hold(rig, 0.6, forward=1, keys=["up"])
+        hold(rig, 1.0, forward=1, keys=["up"])   # firmware ramps at 300 PWM/s: 0 -> 150 takes 0.5 s
         check(rig.motors() == (150, 150), "driving before the crash (speed 150 set earlier)", rig.motors())
         # keep the lease alive so only the program exit can stop it
         import threading

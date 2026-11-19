@@ -366,12 +366,49 @@ function canDrive() {
   return ctlOnline() && st.mode === 'MANUAL' && st.manualCapable && st.arduino === 'online';
 }
 
+// ─── Announcements: the cart screen plays a recorded Bangla message on its speaker ───
+//  carts/<id>/announce  {id, sound, at, by, name}  → the cart adds {playedId, playedAt} when done
+const ANNOUNCE_LABEL = {
+  '0001': 'Please step aside', '0002': 'Keep the area clear', '0004': 'Place your finger', '0005': 'Keep finger still',
+  '0006': 'Reading done, thank you', '0008': 'Doctor is ready', '0009': 'Consultation soon', '0010': 'Take your items',
+};
+const ANN = { lastId: null, timer: null };
+function initAnnouncements() {
+  const path = `carts/${CART_ID}/announce`;
+  document.querySelectorAll('.drive-announce [data-sound]').forEach((b) => b.addEventListener('click', async () => {
+    const sound = b.dataset.sound;
+    const id = Math.random().toString(36).slice(2, 10);
+    ANN.lastId = id;
+    b.classList.add('sending');
+    try {
+      await set(ref(rtdb, path), { id, sound, at: serverTimestamp(), by: S.user.uid, name: myName() });
+      el('annNote').textContent = `Sent: “${ANNOUNCE_LABEL[sound]}” …`;
+      clearTimeout(ANN.timer);
+      ANN.timer = setTimeout(() => {
+        if (ANN.lastId === id) el('annNote').textContent = `Not played yet: is the cart screen on and signed in?`;
+      }, 20000);
+    } catch (err) {
+      toast(`Could not send: ${err.message}`, 'crit');
+    } finally {
+      setTimeout(() => b.classList.remove('sending'), 600);
+    }
+  }));
+  onValue(ref(rtdb, path), (snap) => {
+    const a = snap.val();
+    if (a && a.id === ANN.lastId && a.playedId === a.id) {
+      clearTimeout(ANN.timer);
+      el('annNote').textContent = `Played on the cart ✓  “${ANNOUNCE_LABEL[a.sound] || a.sound}”`;
+    }
+  });
+}
+
 function initDrive() {
   onValue(ref(rtdb, `${ctlPath}/state`), (snap) => { DRV.state = snap.val(); renderDrive(); });
   onValue(ref(rtdb, `${ctlPath}/request`), (snap) => { DRV.request = snap.val(); renderDrive(); });
   el('modeAuto').addEventListener('click', () => requestMode('AUTO'));
   el('modeManual').addEventListener('click', () => requestMode('MANUAL'));
   el('estopBtn').addEventListener('click', () => requestMode('STOP'));
+  initAnnouncements();
 
   try { const v = parseInt(localStorage.getItem('mc-drive-speed') || '', 10); if (v >= 20 && v <= 180) DRV.speed = v; } catch { /* storage blocked */ }
   const spd = el('spd');

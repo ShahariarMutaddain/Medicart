@@ -42,8 +42,69 @@ const S = {
 };
 
 const prefs = loadPrefs();
+
+// ─── Voice announcements (Bangla) ───────────────────────────────
+// The team's recorded announcements. One plays at a time; the same one is never queued twice.
+const SOUNDS = {
+  '0001': 'assets/sounds/0001.mp3', // অনুগ্রহ করে নির্ধারিত স্থান থেকে সরে দাঁড়ান — a person blocks the cart's path
+  '0002': 'assets/sounds/0002.mp3', // নিরবচ্ছিন্ন সেবা নিশ্চিত করতে অনুগ্রহপূর্বক নির্ধারিত স্থানটি খালি রাখুন — still blocked
+  '0004': 'assets/sounds/0004.mp3', // এখন আপনার রক্তের নমুনা সংগ্রহ করা হবে… তর্জনী আঙুলটি… স্থাপন করুন — the cart has arrived (stopped)
+  '0005': 'assets/sounds/0005.mp3', // নমুনা সংগ্রহ সম্পন্ন না হওয়া পর্যন্ত অনুগ্রহ করে আঙুলটি স্থির রাখুন
+  '0006': 'assets/sounds/0006.mp3', // আপনার সকল নমুনা সফলভাবে সংগ্রহ করা হয়েছে, সহযোগিতার জন্য ধন্যবাদ
+  '0008': 'assets/sounds/0008.mp3', // আপনার সঙ্গে কথা বলার জন্য চিকিৎসক প্রস্তুত রয়েছেন
+  '0009': 'assets/sounds/0009.mp3', // আগামী এক মিনিটের মধ্যে চিকিৎসকের সঙ্গে ভিডিও পরামর্শ শুরু হবে… ধন্যবাদ, সুস্থতা কামনা করছি
+  '0010': 'assets/sounds/0010.mp3', // অনুগ্রহ করে আপনার জিনিসপত্র নিয়ে নিন — ONLY by the "Take your items" button on the Drive page
+};
+const voice = (() => {
+  const queue = [];
+  let current = null;
+  function next() {
+    const item = queue.shift();
+    if (!item) { current = null; return; }
+    const a = new Audio(SOUNDS[item.key]);
+    a.dataset.sound = item.key;
+    current = { key: item.key, audio: a };
+    let finished = false;
+    const done = () => {
+      if (finished) return;
+      finished = true;
+      current = null;
+      try { item.onEnd?.(); } catch { /* ignore */ }
+      setTimeout(next, 300);
+    };
+    a.addEventListener('ended', done);
+    a.addEventListener('error', done);
+    const go = () => a.play().catch((err) => { console.warn('[voice]', item.key, err?.message || err); done(); });
+    if (prefs.speakerId && typeof a.setSinkId === 'function') a.setSinkId(prefs.speakerId).then(go, go);
+    else go();
+  }
+  return {
+    // returns true if the sound will play
+    play(key, opts = {}) {
+      if (!SOUNDS[key]) return false;
+      if (prefs.voice === 'off' && !opts.force) return false;
+      if (consultQuiet() && !opts.force) return false;   // never talk over the doctor (see consultQuiet)
+      if (current?.key === key || queue.some((q) => q.key === key)) return false;
+      queue.push({ key, onEnd: opts.onEnd });
+      if (!current) next();
+      return true;
+    },
+    busy: () => !!current || queue.length > 0,
+    // silence now: drop the queue and stop what is playing
+    stopAll() {
+      queue.length = 0;
+      if (current) { try { current.audio.pause(); } catch { /* ignore */ } current = null; }
+    },
+  };
+})();
+
+// No automatic announcements during a video consultation, nor for 60 s after it
+// (the patient is still sitting in front of the camera). "Take your items" (pressed on purpose) still plays.
+const CONSULT_QUIET_AFTER_MS = 60000;
+let quietUntil = 0;
+function consultQuiet() { return !!S.call || Date.now() < quietUntil; }
 function loadPrefs() {
-  const base = { cameraId: '', micId: '', speakerId: '', autoAnswer: DEFAULT_AUTO_ANSWER_S };
+  const base = { cameraId: '', micId: '', speakerId: '', autoAnswer: DEFAULT_AUTO_ANSWER_S, voice: 'on' };
   try { return { ...base, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return base; }
 }
 function savePrefs() {
@@ -96,6 +157,7 @@ async function start() {
   startPresence();
   startSignalling();
   startDriveBanner();
+  startAnnouncements();
   startSensor();
   setInterval(renderChips, 2000);
   navigator.mediaDevices?.addEventListener?.('devicechange', () => { if (!S.call) acquireMedia({ quiet: true }); });
@@ -233,6 +295,7 @@ function onSensor(d) {
   S.vit = d;
   S.lastSensorAt = Date.now();
   renderVitals();
+  vitalsVoice(d);
   if (!wasOnline) pushPresence();
 
   set(ref(rtdb, 'medicart/live'), {
@@ -249,6 +312,22 @@ function onSensor(d) {
       timestamp: fsTimestamp(),
     }).then(() => { S.logged += 1; el('setLogged').textContent = S.logged; })
       .catch((e) => console.warn('firestore history', e));
+  }
+}
+
+// Pulse-oximeter announcements: finger placed → keep it still (0005), reading done → thank you (0006),
+// then the consultation will start soon (0009, only when no call is on). Movement → keep still again.
+const VS = { finger: false, measuringSaid: false, lockedSaid: false, lastStill: 0 };
+function vitalsVoice(d) {
+  if (!d.fingerDetected) { VS.finger = false; VS.measuringSaid = false; VS.lockedSaid = false; return; }
+  VS.finger = true;
+  const now = Date.now();
+  if (d.state === 'measuring' && !VS.measuringSaid) { VS.measuringSaid = true; VS.lastStill = now; voice.play('0005'); }
+  else if (d.motion && !VS.lockedSaid && now - VS.lastStill > 12000) { VS.lastStill = now; voice.play('0005'); }
+  if (d.state === 'locked' && !VS.lockedSaid) {
+    VS.lockedSaid = true;
+    voice.play('0006');
+    if (!S.call && !S.ring) voice.play('0009');
   }
 }
 
@@ -328,8 +407,62 @@ function startDriveBanner() {
     el('kDriveBy').textContent = stop ? '' : (st.driver ? `· ${st.driver}` : '');
     box.hidden = false;
   };
-  onValue(ref(rtdb, `carts/${CART_ID}/control/state`), (snap) => { st = snap.val(); show(); });
-  setInterval(show, 2000);
+  onValue(ref(rtdb, `carts/${CART_ID}/control/state`), (snap) => { st = snap.val(); show(); blockedVoice(st); arrivalVoice(st); });
+  setInterval(() => { show(); blockedVoice(st); arrivalVoice(st); }, 1000);
+}
+
+// A person in the cart's stop zone while it is trying to drive: Auto (line following), or Manual while
+// an operator is pressing a drive key. "Please step aside" (0001); still there after 8 s:
+// "please keep the area clear" (0002), then every 20 s. Silent during a consultation.
+const BV = { since: 0, last: 0, count: 0, last0001: 0 };
+function blockedVoice(st) {
+  const fresh = st && st.updatedAt && serverNow() - st.updatedAt < 6000;
+  const blocked = fresh && !consultQuiet() &&
+    ((st.mode === 'AUTO' && st.vision === 'blocked') || (st.mode === 'MANUAL' && st.blocked === true));
+  const now = Date.now();
+  if (!blocked) { BV.since = 0; return; }
+  if (!BV.since) {
+    BV.since = now; BV.last = now; BV.count = 0;
+    if (now - BV.last0001 > 15000) { BV.last0001 = now; voice.play('0001'); }
+    return;
+  }
+  if (now - BV.last >= (BV.count === 0 ? 8000 : 20000)) { BV.last = now; BV.count += 1; voice.play('0002'); }
+}
+
+// Arrival: the cart drove, then stood still for 3 s (not because a person is in the way):
+// "place your index finger on the sensor" (0004). Once per stop, when the pulse sensor is online,
+// no finger is on it yet and no call is on.
+const AV = { moved: false, stillSince: 0 };
+function arrivalVoice(st) {
+  const fresh = st && st.updatedAt && serverNow() - st.updatedAt < 6000;
+  if (!fresh) return;
+  const a = st.applied || {};
+  const now = Date.now();
+  if (Math.abs(a.l || 0) + Math.abs(a.r || 0) > 0) { AV.moved = true; AV.stillSince = 0; return; }
+  if (!AV.moved) return;
+  if (st.vision === 'blocked') { AV.stillSince = 0; return; }      // stopped for a person, not arrived
+  if (!AV.stillSince) { AV.stillSince = now; return; }
+  if (now - AV.stillSince < 3000) return;
+  if (!sensorOnline() || S.vit?.fingerDetected || S.call || S.ring) return;
+  AV.moved = false;
+  voice.play('0004');
+}
+
+// "Take your items" on the console's Drive page (the only announcement started by a person): carts/<id>/announce {id, sound, at, name}
+function startAnnouncements() {
+  const seen = new Set();
+  const path = `carts/${CART_ID}/announce`;
+  onValue(ref(rtdb, path), (snap) => {
+    const a = snap.val();
+    if (!a || !a.id || !a.sound || seen.has(a.id) || a.playedId === a.id) return;
+    seen.add(a.id);
+    if (a.at && serverNow() - a.at > 15000) return;          // an old request (screen restarted)
+    if (a.sound === '0010') toast('অনুগ্রহ করে আপনার জিনিসপত্র নিন · Please take your items', 'ok', 8000);
+    voice.play(a.sound, {
+      force: true,
+      onEnd: () => update(ref(rtdb, path), { playedId: a.id, playedAt: serverTimestamp() }).catch(() => {}),
+    });
+  });
 }
 
 function onCallNode(d) {
@@ -360,7 +493,10 @@ function onCallNode(d) {
 // ─── Ringing ────────────────────────────────────────────────────
 function startRinging(d) {
   const name = d.doctor?.name || 'Doctor';
-  S.ring = { callId: d.callId, data: d, timer: null, countdown: null, audio: ringtone() };
+  S.ring = { callId: d.callId, data: d, timer: null, countdown: null, audio: null };
+  const ringId = d.callId;
+  const startTone = () => { if (S.ring?.callId === ringId && !S.ring.audio) S.ring.audio = ringtone(); };
+  if (!voice.play('0008', { onEnd: startTone })) startTone();   // "the doctor is ready to talk with you"
   S.handled.add(d.callId);
   el('incName').textContent = name;
   el('incoming').hidden = false;
@@ -371,7 +507,12 @@ function startRinging(d) {
     paint();
     S.ring.countdown = setInterval(() => {
       left -= 1;
-      if (left <= 0) { clearInterval(S.ring.countdown); answer(); } else paint();
+      if (left <= 0) {
+        clearInterval(S.ring.countdown);
+        const until = Date.now() + 20000;           // never wait more than 20 s
+        const go = () => { if (S.ring?.callId !== ringId) return; if (voice.busy() && Date.now() < until) setTimeout(go, 250); else answer(); };
+        go();                                       // after the announcement has finished
+      } else paint();
     }, 1000);
   } else {
     el('incAuto').textContent = 'Tap Answer to talk to the doctor · কথা বলতে "কল ধরুন" চাপুন';
@@ -424,6 +565,7 @@ function initCallUi() {
 async function answer() {
   const r = S.ring; if (!r) return;
   stopRinging();
+  voice.stopAll();                                  // the consultation starts: silence
   if (!S.local) await acquireMedia();
 
   const d = r.data;
@@ -496,6 +638,8 @@ async function endCall(reason, notifyDoctor) {
   if (!C || C.ended) return;
   C.ended = true;
   S.call = null;
+  quietUntil = Date.now() + CONSULT_QUIET_AFTER_MS;
+  BV.since = 0; AV.moved = false; AV.stillSince = 0; VS.measuringSaid = VS.lockedSaid = true;   // no catch-up after the call
   if (notifyDoctor) {
     await update(ref(rtdb, callPath), { status: 'ended', endedBy: 'cart', endReason: reason, endedAt: serverTimestamp() }).catch(() => {});
   }
@@ -567,6 +711,8 @@ function initSettings() {
     if (typeof v.setSinkId === 'function') v.setSinkId(prefs.speakerId).catch(() => {});
   });
   el('setAuto').addEventListener('change', (e) => { prefs.autoAnswer = Number(e.target.value); savePrefs(); });
+  el('setVoice').addEventListener('change', (e) => { prefs.voice = e.target.value; savePrefs(); });
+  el('setVoiceTest').addEventListener('click', () => { if (!voice.play('0008', { force: true })) toast('A voice announcement is already playing.'); });
   el('setTest').addEventListener('click', testSpeaker);
   el('setReload').addEventListener('click', () => location.reload());
   el('setSignOut').addEventListener('click', async () => {
@@ -577,6 +723,7 @@ function initSettings() {
 
 async function openSettings() {
   el('setAuto').value = String(prefs.autoAnswer);
+  el('setVoice').value = prefs.voice === 'off' ? 'off' : 'on';
   if (![...el('setAuto').options].some((o) => o.value === String(prefs.autoAnswer))) el('setAuto').value = '3';
   el('settings').hidden = false;
   await fillDevices();
