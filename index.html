@@ -542,6 +542,12 @@ body::before {
 .drive-mode { grid-row: span 1; }
 .drive-pad-card { grid-row: span 2; }
 @media (max-width: 1000px) { .drive-grid { grid-template-columns: 1fr; } .drive-pad-card { grid-row: auto; } }
+.drive-announce .ann-main { width: 100%; height: auto; min-height: 58px; flex-direction: column; gap: 2px; padding: 10px 16px; }
+.drive-announce .ann-main b { font-size: 16px; }
+.drive-announce .ann-main .bn { font-size: 13px; font-weight: 500; opacity: .85; }
+.ann-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 8px; margin-top: 12px; }
+.ann-grid .btn { justify-content: center; }
+.drive-announce .btn.sending { opacity: .6; }
 .mode-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .mode-btn { display: grid; justify-items: start; gap: 2px; text-align: left; padding: 12px 14px; border-radius: var(--r-md); border: 1.5px solid var(--line); background: var(--surface-2); color: var(--text); cursor: pointer; font: inherit; transition: border-color .15s, background-color .15s; min-width: 0; }
 .mode-btn svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; color: var(--text-3); margin-bottom: 4px; }
@@ -608,7 +614,7 @@ body::before {
 // ════════════════════════════════════════════════════════════════
 
 (function () {
-const APP_VERSION = '2.0.0';
+const APP_VERSION = '3.5.0';
 
 // Which cart this deployment talks to. One console can serve one cart;
 // for a second cart, deploy a copy with CART_ID = 'medicart-02'.
@@ -747,6 +753,8 @@ function normalizeSensor(raw) {
     fingerDetected: finger,
     state: String(d.state ?? (finger ? 'measuring' : 'no_finger')),
     samplesCollected: num(d.samplesCollected ?? d.samples),
+    motion: Boolean(d.motion),          // ESP32 3.0: the finger is moving
+    spo2Held: Boolean(d.spo2Held),      // ESP32 3.0: last good SpO2 kept during movement
     deviceId: String(d.deviceId ?? 'MEDICART-01'),
     uptime: num(d.uptime),
     at: Date.now(),
@@ -1293,6 +1301,21 @@ window.MC = {
             </dl>
           </article>
 
+          <article class="card drive-announce">
+            <div class="card-head"><h3>Announcements</h3><span class="pill" id="annPill">Cart speaker</span></div>
+            <button class="btn btn-gold btn-lg ann-main" type="button" data-sound="0010"><b>Take your items</b><span class="bn">অনুগ্রহ করে আপনার জিনিসপত্র নিন</span></button>
+            <div class="ann-grid" role="group" aria-label="Voice announcements">
+              <button class="btn btn-sm" type="button" data-sound="0001" title="অনুগ্রহ করে নির্ধারিত স্থান থেকে সরে দাঁড়ান">Please step aside</button>
+              <button class="btn btn-sm" type="button" data-sound="0002" title="নিরবচ্ছিন্ন সেবা নিশ্চিত করতে অনুগ্রহপূর্বক নির্ধারিত স্থানটি খালি রাখুন">Keep the area clear</button>
+              <button class="btn btn-sm" type="button" data-sound="0004" title="এখন আপনার রক্তের নমুনা সংগ্রহ করা হবে… তর্জনী আঙুলটি নির্ধারিত স্থানে স্থাপন করুন">Place your finger</button>
+              <button class="btn btn-sm" type="button" data-sound="0005" title="নমুনা সংগ্রহ সম্পন্ন না হওয়া পর্যন্ত অনুগ্রহ করে আঙুলটি স্থির রাখুন">Keep finger still</button>
+              <button class="btn btn-sm" type="button" data-sound="0006" title="আপনার সকল নমুনা সফলভাবে সংগ্রহ করা হয়েছে, সহযোগিতার জন্য ধন্যবাদ">Reading done, thank you</button>
+              <button class="btn btn-sm" type="button" data-sound="0008" title="আপনার সঙ্গে কথা বলার জন্য চিকিৎসক প্রস্তুত রয়েছেন">Doctor is ready</button>
+              <button class="btn btn-sm" type="button" data-sound="0009" title="আগামী এক মিনিটের মধ্যে চিকিৎসকের সঙ্গে ভিডিও পরামর্শ শুরু হবে… ধন্যবাদ">Consultation soon</button>
+            </div>
+            <p class="drive-note" id="annNote">Plays in Bangla on the cart's speaker.</p>
+          </article>
+
           <article class="card drive-log">
             <div class="card-head"><h3>Controller log</h3></div>
             <ol class="drv-events" id="drvEvents"><li class="empty">No events yet.</li></ol>
@@ -1772,12 +1795,49 @@ function canDrive() {
   return ctlOnline() && st.mode === 'MANUAL' && st.manualCapable && st.arduino === 'online';
 }
 
+// ─── Announcements: the cart screen plays a recorded Bangla message on its speaker ───
+//  carts/<id>/announce  {id, sound, at, by, name}  → the cart adds {playedId, playedAt} when done
+const ANNOUNCE_LABEL = {
+  '0001': 'Please step aside', '0002': 'Keep the area clear', '0004': 'Place your finger', '0005': 'Keep finger still',
+  '0006': 'Reading done, thank you', '0008': 'Doctor is ready', '0009': 'Consultation soon', '0010': 'Take your items',
+};
+const ANN = { lastId: null, timer: null };
+function initAnnouncements() {
+  const path = `carts/${CART_ID}/announce`;
+  document.querySelectorAll('.drive-announce [data-sound]').forEach((b) => b.addEventListener('click', async () => {
+    const sound = b.dataset.sound;
+    const id = Math.random().toString(36).slice(2, 10);
+    ANN.lastId = id;
+    b.classList.add('sending');
+    try {
+      await set(ref(rtdb, path), { id, sound, at: serverTimestamp(), by: S.user.uid, name: myName() });
+      el('annNote').textContent = `Sent: “${ANNOUNCE_LABEL[sound]}” …`;
+      clearTimeout(ANN.timer);
+      ANN.timer = setTimeout(() => {
+        if (ANN.lastId === id) el('annNote').textContent = `Not played yet: is the cart screen on and signed in?`;
+      }, 20000);
+    } catch (err) {
+      toast(`Could not send: ${err.message}`, 'crit');
+    } finally {
+      setTimeout(() => b.classList.remove('sending'), 600);
+    }
+  }));
+  onValue(ref(rtdb, path), (snap) => {
+    const a = snap.val();
+    if (a && a.id === ANN.lastId && a.playedId === a.id) {
+      clearTimeout(ANN.timer);
+      el('annNote').textContent = `Played on the cart ✓  “${ANNOUNCE_LABEL[a.sound] || a.sound}”`;
+    }
+  });
+}
+
 function initDrive() {
   onValue(ref(rtdb, `${ctlPath}/state`), (snap) => { DRV.state = snap.val(); renderDrive(); });
   onValue(ref(rtdb, `${ctlPath}/request`), (snap) => { DRV.request = snap.val(); renderDrive(); });
   el('modeAuto').addEventListener('click', () => requestMode('AUTO'));
   el('modeManual').addEventListener('click', () => requestMode('MANUAL'));
   el('estopBtn').addEventListener('click', () => requestMode('STOP'));
+  initAnnouncements();
 
   try { const v = parseInt(localStorage.getItem('mc-drive-speed') || '', 10); if (v >= 20 && v <= 180) DRV.speed = v; } catch { /* storage blocked */ }
   const spd = el('spd');
