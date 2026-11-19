@@ -965,14 +965,26 @@ const voice = (() => {
     play(key, opts = {}) {
       if (!SOUNDS[key]) return false;
       if (prefs.voice === 'off' && !opts.force) return false;
+      if (consultQuiet() && !opts.force) return false;   // never talk over the doctor (see consultQuiet)
       if (current?.key === key || queue.some((q) => q.key === key)) return false;
       queue.push({ key, onEnd: opts.onEnd });
       if (!current) next();
       return true;
     },
     busy: () => !!current || queue.length > 0,
+    // silence now: drop the queue and stop what is playing
+    stopAll() {
+      queue.length = 0;
+      if (current) { try { current.audio.pause(); } catch { /* ignore */ } current = null; }
+    },
   };
 })();
+
+// No automatic announcements during a video consultation, nor for 60 s after it
+// (the patient is still sitting in front of the camera). "Take your items" (pressed on purpose) still plays.
+const CONSULT_QUIET_AFTER_MS = 60000;
+let quietUntil = 0;
+function consultQuiet() { return !!S.call || Date.now() < quietUntil; }
 function loadPrefs() {
   const base = { cameraId: '', micId: '', speakerId: '', autoAnswer: DEFAULT_AUTO_ANSWER_S, voice: 'on' };
   try { return { ...base, ...JSON.parse(localStorage.getItem(PREFS_KEY) || '{}') }; } catch { return base; }
@@ -1281,12 +1293,14 @@ function startDriveBanner() {
   setInterval(() => { show(); blockedVoice(st); arrivalVoice(st); }, 1000);
 }
 
-// A person in the cart's stop zone while it is driving (Auto or Manual): "please step aside" (0001),
-// still there after 8 s: "please keep the area clear" (0002), then every 20 s.
+// A person in the cart's stop zone while it is trying to drive: Auto (line following), or Manual while
+// an operator is pressing a drive key. "Please step aside" (0001); still there after 8 s:
+// "please keep the area clear" (0002), then every 20 s. Silent during a consultation.
 const BV = { since: 0, last: 0, count: 0, last0001: 0 };
 function blockedVoice(st) {
   const fresh = st && st.updatedAt && serverNow() - st.updatedAt < 6000;
-  const blocked = fresh && (st.mode === 'AUTO' || st.mode === 'MANUAL') && st.vision === 'blocked';
+  const blocked = fresh && !consultQuiet() &&
+    ((st.mode === 'AUTO' && st.vision === 'blocked') || (st.mode === 'MANUAL' && st.blocked === true));
   const now = Date.now();
   if (!blocked) { BV.since = 0; return; }
   if (!BV.since) {
@@ -1433,6 +1447,7 @@ function initCallUi() {
 async function answer() {
   const r = S.ring; if (!r) return;
   stopRinging();
+  voice.stopAll();                                  // the consultation starts: silence
   if (!S.local) await acquireMedia();
 
   const d = r.data;
@@ -1505,6 +1520,8 @@ async function endCall(reason, notifyDoctor) {
   if (!C || C.ended) return;
   C.ended = true;
   S.call = null;
+  quietUntil = Date.now() + CONSULT_QUIET_AFTER_MS;
+  BV.since = 0; AV.moved = false; AV.stillSince = 0; VS.measuringSaid = VS.lockedSaid = true;   // no catch-up after the call
   if (notifyDoctor) {
     await update(ref(rtdb, callPath), { status: 'ended', endedBy: 'cart', endReason: reason, endedAt: serverTimestamp() }).catch(() => {});
   }
